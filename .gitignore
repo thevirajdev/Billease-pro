@@ -1,0 +1,54 @@
+## .NET & Visual Studio Build Outputs
+[Bb]in/
+[Oo]bj/
+publish/
+*.exe
+*.dll
+*.pdb
+*.msi
+*.cab
+*.ilk
+*.aps
+*.intermediate.cache
+
+## Compressed & Large Archives
+*.zip
+*.7z
+*.tar
+*.tar.gz
+*.rar
+
+## Databases, Caches & Backups
+*.db
+*.db-shm
+*.db-wal
+*.bak
+*.sqlite
+*.sqlite3
+
+## IDE & User Environment Files
+.vs/
+.vscode/
+.idea/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+
+## Temporary & Diagnostic Logs
+*.log
+build_*.txt
+build_*.log
+err*.txt
+errors*.txt
+
+## Local Tooling & AI Agent Caches
+.dotnet/
+.superbrain/
+_inspect/
+tmp/
+
+## OS Metadata
+Thumbs.db
+[Dd]esktop.ini
+.DS_Store

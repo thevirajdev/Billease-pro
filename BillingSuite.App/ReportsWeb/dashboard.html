@@ -1,0 +1,306 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Billing Suite Dashboard</title>
+    <style>
+        @font-face {
+            font-family: 'Inter';
+            src: local('Inter'), local('Segoe UI'), local('Roboto'), local('Helvetica Neue'), sans-serif;
+        }
+    </style>
+    <script src="js/chart.js"></script>
+    <style>
+        :root {
+            --bg-color: #f8f9fa;
+            --card-bg: #ffffff;
+            --text-primary: #2d3436;
+            --text-secondary: #636e72;
+            --sale-color: #00b894;
+            --purchase-color: #0984e3;
+            --profit-color: #6c5ce7;
+            --danger-color: #d63031;
+            --shadow: 0 4px 6px rgba(0, 0, 0, 0.05), 0 1px 3px rgba(0, 0, 0, 0.1);
+        }
+
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: 'Inter', sans-serif; background-color: var(--bg-color); color: var(--text-primary); padding: 20px; }
+
+        .header { margin-bottom: 24px; }
+        .header h1 { font-size: 24px; font-weight: 700; color: #1e272e; }
+        .header p { color: var(--text-secondary); font-size: 14px; margin-top: 4px; }
+
+        .stats-grid { 
+            display: grid; 
+            grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); 
+            gap: 20px; 
+            margin-bottom: 30px;
+        }
+
+        .stat-card {
+            background: var(--card-bg);
+            padding: 20px;
+            border-radius: 12px;
+            box-shadow: var(--shadow);
+            border-left: 5px solid #dfe6e9;
+            transition: transform 0.2s;
+        }
+        .stat-card:hover { transform: translateY(-2px); }
+        .stat-card.sale { border-left-color: var(--sale-color); }
+        .stat-card.purchase { border-left-color: var(--purchase-color); }
+        .stat-card.profit { border-left-color: var(--profit-color); }
+
+        .stat-label { font-size: 12px; font-weight: 600; text-transform: uppercase; color: var(--text-secondary); letter-spacing: 0.5px; }
+        .stat-value { font-size: 22px; font-weight: 700; margin: 8px 0; color: var(--text-primary); }
+        .stat-period { font-size: 11px; color: var(--text-secondary); }
+
+        .charts-container {
+            display: grid;
+            grid-template-columns: 2fr 1fr;
+            gap: 20px;
+            margin-bottom: 30px;
+        }
+
+        .chart-card {
+            background: var(--card-bg);
+            padding: 20px;
+            border-radius: 12px;
+            box-shadow: var(--shadow);
+            position: relative;
+        }
+        .chart-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
+        .chart-card h2 { font-size: 16px; font-weight: 600; color: var(--text-secondary); margin: 0; }
+
+        .filter-group { display: flex; gap: 8px; }
+        .filter-btn { 
+            padding: 6px 12px; 
+            border-radius: 6px; 
+            border: 1px solid #dfe6e9; 
+            background: #fff; 
+            cursor: pointer; 
+            font-size: 12px; 
+            font-weight: 500; 
+            color: var(--text-secondary);
+            transition: all 0.2s;
+        }
+        .filter-btn:hover { background: #f1f2f6; }
+        .filter-btn.active { background: var(--purchase-color); color: #fff; border-color: var(--purchase-color); }
+
+        .bottom-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 20px;
+        }
+
+        .info-list { list-style: none; }
+        .info-item { display: flex; justify-content: space-between; padding: 12px 0; border-bottom: 1px solid #f1f2f6; }
+        .info-item:last-child { border-bottom: none; }
+        .info-item .label { font-size: 14px; color: var(--text-secondary); }
+        .info-item .value { font-size: 14px; font-weight: 600; }
+
+        .currency::before { content: var(--currency-symbol, ''); margin-right: 4px; }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>Reports Overview</h1>
+        <p id="update-time">Last updated: Loading...</p>
+    </div>
+
+    <!-- Quick Stats -->
+    <div class="stats-grid">
+        <div class="stat-card sale">
+            <div class="stat-label">Today's Sales</div>
+            <div class="stat-value currency" id="stat-today-sale">0</div>
+            <div class="stat-period">Daily revenue</div>
+        </div>
+        <div class="stat-card purchase">
+            <div class="stat-label">Today's Purchase</div>
+            <div class="stat-value currency" id="stat-today-purchase">0</div>
+            <div class="stat-period">Stock acquisition</div>
+        </div>
+        <div class="stat-card profit">
+            <div class="stat-label">Today's Profit</div>
+            <div class="stat-value currency" id="stat-today-profit">0</div>
+            <div class="stat-period">Calculated margin</div>
+        </div>
+        <div class="stat-card sale">
+            <div class="stat-label">Weekly Sales</div>
+            <div class="stat-value currency" id="stat-week-sale">0</div>
+            <div class="stat-period">Last 7 days</div>
+        </div>
+        <div class="stat-card purchase">
+            <div class="stat-label">Weekly Purchase</div>
+            <div class="stat-value currency" id="stat-week-purchase">0</div>
+            <div class="stat-period">Last 7 days</div>
+        </div>
+        <div class="stat-card profit">
+            <div class="stat-label">Weekly Profit</div>
+            <div class="stat-value currency" id="stat-week-profit">0</div>
+            <div class="stat-period">Last 7 days</div>
+        </div>
+        <div class="stat-card sale">
+            <div class="stat-label">Monthly Sales</div>
+            <div class="stat-value currency" id="stat-month-sale">0</div>
+            <div class="stat-period">Current month</div>
+        </div>
+        <div class="stat-card purchase">
+            <div class="stat-label">Monthly Purchase</div>
+            <div class="stat-value currency" id="stat-month-purchase">0</div>
+            <div class="stat-period">Current month</div>
+        </div>
+        <div class="stat-card profit">
+            <div class="stat-label">Monthly Profit</div>
+            <div class="stat-value currency" id="stat-month-profit">0</div>
+            <div class="stat-period">Current month</div>
+        </div>
+        <div class="stat-card sale">
+            <div class="stat-label">Yearly Sales</div>
+            <div class="stat-value currency" id="stat-year-sale">0</div>
+            <div class="stat-period">Calendar year</div>
+        </div>
+        <div class="stat-card purchase">
+            <div class="stat-label">Yearly Purchase</div>
+            <div class="stat-value currency" id="stat-year-purchase">0</div>
+            <div class="stat-period">Calendar year</div>
+        </div>
+        <div class="stat-card profit">
+            <div class="stat-label">Yearly Profit</div>
+            <div class="stat-value currency" id="stat-year-profit">0</div>
+            <div class="stat-period">Calendar year</div>
+        </div>
+    </div>
+
+    <!-- Charts Row -->
+    <div class="charts-container">
+        <div class="chart-card" style="min-height: 400px;">
+            <div class="chart-header">
+                <h2>Sales vs Purchase (Trend)</h2>
+                <div class="filter-group">
+                    <button class="filter-btn active" onclick="setPeriod('7d', this)">7 Days</button>
+                    <button class="filter-btn" onclick="setPeriod('30d', this)">30 Days</button>
+                    <button class="filter-btn" onclick="setPeriod('year', this)">1 Year</button>
+                </div>
+            </div>
+            <div style="position: relative; height: 320px; width: 100%;">
+                <canvas id="mainChart"></canvas>
+            </div>
+        </div>
+        <div class="chart-card">
+            <h2>Financial Health</h2>
+            <ul class="info-list">
+                <li class="info-item">
+                    <span class="label">Lifetime Sales</span>
+                    <span class="value currency" id="val-lt-sale" style="font-weight:700">0</span>
+                </li>
+                <li class="info-item">
+                    <span class="label">Lifetime Purchase</span>
+                    <span class="value currency" id="val-lt-purchase" style="font-weight:700">0</span>
+                </li>
+                <li class="info-item">
+                    <span class="label">Payment Received</span>
+                    <span class="value currency" id="val-pay-received">0</span>
+                </li>
+                <li class="info-item">
+                    <span class="label">Customer Dues</span>
+                    <span class="value currency" id="val-cust-due" style="color:var(--danger-color)">0</span>
+                </li>
+                <li class="info-item">
+                    <span class="label">Payment Sent</span>
+                    <span class="value currency" id="val-pay-sent">0</span>
+                </li>
+                <li class="info-item">
+                    <span class="label">Supplier Dues</span>
+                    <span class="value currency" id="val-sup-due" style="color:var(--danger-color)">0</span>
+                </li>
+                <li class="info-item" style="margin-top: 10px; border-top: 2px solid #f1f2f6; padding-top: 15px;">
+                    <span class="label" style="font-weight:700">Total Profit</span>
+                    <span class="value currency" id="val-total-profit" style="color:var(--profit-color); font-size:18px">0</span>
+                </li>
+            </ul>
+        </div>
+    </div>
+
+    <script>
+        let mainChart = null;
+
+        function updateStats(data) {
+            document.getElementById('update-time').innerText = 'Last updated: ' + new Date().toLocaleString();
+            
+            // Apply currency symbol from Settings (falls back to empty string if not present)
+            if (data.currencySymbol !== undefined) {
+                document.documentElement.style.setProperty('--currency-symbol', "'" + data.currencySymbol + "'");
+            }
+
+            // Numerical Updates
+            for (const key in data.stats) {
+                const el = document.getElementById('stat-' + key);
+                if (el) el.innerText = parseFloat(data.stats[key]).toLocaleString(undefined, { minimumFractionDigits: 2 });
+            }
+            for (const key in data.financials) {
+                const el = document.getElementById('val-' + key);
+                if (el) el.innerText = parseFloat(data.financials[key]).toLocaleString(undefined, { minimumFractionDigits: 2 });
+            }
+
+            // Chart Update
+            const ctx = document.getElementById('mainChart').getContext('2d');
+            if (mainChart) mainChart.destroy();
+
+            mainChart = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: data.chart.labels,
+                    datasets: [
+                        {
+                            label: 'Sales',
+                            data: data.chart.sales,
+                            borderColor: '#00b894',
+                            backgroundColor: 'rgba(0, 184, 148, 0.1)',
+                            fill: true,
+                            tension: 0.4
+                        },
+                        {
+                            label: 'Purchase',
+                            data: data.chart.purchases,
+                            borderColor: '#0984e3',
+                            backgroundColor: 'rgba(9, 132, 227, 0.1)',
+                            fill: true,
+                            tension: 0.4
+                        }
+                    ]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: { position: 'top', labels: { usePointStyle: true, font: { family: 'Inter', size: 12 } } }
+                    },
+                    scales: {
+                        y: { beginAtZero: true, grid: { display: false } },
+                        x: { grid: { display: false } }
+                    }
+                }
+            });
+        }
+
+        function setPeriod(p, btn) {
+            // Updated active UI
+            document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
+            btn.classList.add('active');
+
+            // Notify C# to refresh with this period
+            if (window.chrome && window.chrome.webview) {
+                window.chrome.webview.postMessage({ type: 'filter-chart', period: p });
+            }
+        }
+
+        // Test implementation (C# will call updateStats)
+        // updateStats({
+        //     stats: { 'today-sale': 287, 'today-purchase': 0, ... },
+        //     financials: { 'pay-received': 287, 'cust-due': 0, ... },
+        //     chart: { labels: ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'], sales: [100, 200, 150, 300, 450, 400, 500], purchases: [80, 150, 130, 250, 300, 280, 350] }
+        // });
+    </script>
+</body>
+</html>
