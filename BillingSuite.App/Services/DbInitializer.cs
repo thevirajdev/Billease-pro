@@ -34,9 +34,6 @@ namespace BillingSuite.App.Services
                     MessageBox.Show("Database successfully restored from backup. Welcome back!", 
                         "System Information", MessageBoxButtons.OK, MessageBoxIcon.Information);
                 }
-
-                // Seed/Merge initial data from billing.db / billing_seed.db so no rows/tables are missing
-                EnsureSeedDataImported(dbPath);
             }
             catch (Exception ex)
             {
@@ -594,82 +591,6 @@ namespace BillingSuite.App.Services
             catch (Exception ex)
             {
                 Console.WriteLine($"SKU Backfill Error: {ex.Message}");
-            }
-        }
-
-        private static void EnsureSeedDataImported(string liveDbPath)
-        {
-            try
-            {
-                string? seedPath = null;
-                var baseDir = AppDomain.CurrentDomain.BaseDirectory;
-                if (File.Exists(Path.Combine(baseDir, "billing_seed.db")))
-                    seedPath = Path.Combine(baseDir, "billing_seed.db");
-                else if (File.Exists(Path.Combine(baseDir, "billing.db")))
-                    seedPath = Path.Combine(baseDir, "billing.db");
-                else if (File.Exists(@"D:\billease-pro\billease bro\billing.db"))
-                    seedPath = @"D:\billease-pro\billease bro\billing.db";
-
-                if (string.IsNullOrEmpty(seedPath) || !File.Exists(seedPath)) return;
-
-                if (!File.Exists(liveDbPath))
-                {
-                    var liveDir = Path.GetDirectoryName(liveDbPath);
-                    if (!string.IsNullOrEmpty(liveDir) && !Directory.Exists(liveDir))
-                        Directory.CreateDirectory(liveDir);
-                    File.Copy(seedPath, liveDbPath, true);
-                    Console.WriteLine($"Initialized live database from seed file: {seedPath}");
-                    return;
-                }
-
-                // If liveDbPath exists, perform safe merge of missing rows from seedPath using ATTACH DATABASE
-                using var conn = new Microsoft.Data.Sqlite.SqliteConnection($"Data Source={liveDbPath}");
-                conn.Open();
-
-                using (var attachCmd = conn.CreateCommand())
-                {
-                    attachCmd.CommandText = $"ATTACH DATABASE '{seedPath.Replace("'", "''")}' AS seedDb;";
-                    attachCmd.ExecuteNonQuery();
-                }
-
-                string[] mergeTables = new[]
-                {
-                    "Customers", "Products", "ProductBatches", "Invoices", "InvoiceItems",
-                    "Payments", "Suppliers", "Purchases", "PurchaseItems", "PurchasePayments",
-                    "Expenses", "DamagedItems", "RecycleBin", "AiChatMessages"
-                };
-
-                foreach (var table in mergeTables)
-                {
-                    try
-                    {
-                        using var chkCmd = conn.CreateCommand();
-                        chkCmd.CommandText = $"SELECT COUNT(*) FROM seedDb.sqlite_master WHERE type='table' AND name='{table}';";
-                        if (Convert.ToInt32(chkCmd.ExecuteScalar()) == 0) continue;
-
-                        using var mergeCmd = conn.CreateCommand();
-                        mergeCmd.CommandText = $"INSERT OR IGNORE INTO main.\"{table}\" SELECT * FROM seedDb.\"{table}\";";
-                        int inserted = mergeCmd.ExecuteNonQuery();
-                        if (inserted > 0)
-                        {
-                            Console.WriteLine($"Merged {inserted} missing records into {table} from seed database.");
-                        }
-                    }
-                    catch (Exception ex)
-                    {
-                        Console.WriteLine($"Merge table warning ({table}): {ex.Message}");
-                    }
-                }
-
-                using (var detachCmd = conn.CreateCommand())
-                {
-                    detachCmd.CommandText = "DETACH DATABASE seedDb;";
-                    detachCmd.ExecuteNonQuery();
-                }
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"EnsureSeedDataImported warning: {ex.Message}");
             }
         }
     }
