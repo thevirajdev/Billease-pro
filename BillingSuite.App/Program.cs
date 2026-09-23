@@ -66,7 +66,15 @@ static class Program
             // Start background cloud sync engine
             Services.SyncService.StartBackgroundWorker();
 
-            // Phase 7: gate the app behind a local account. First run (no account on this
+            // Borderless MP4 video splash screen animation on app startup
+            try
+            {
+                using var splash = new Forms.VideoSplashForm();
+                splash.ShowDialog();
+            }
+            catch { }
+
+            // Gate the app behind a local account. First run (no account on this
             // device) opens on the create-account tab and captures the company profile.
             if (args.Length == 0 || args[0] != "--no-auth")
             {

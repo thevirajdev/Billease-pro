@@ -59,6 +59,13 @@ namespace BillingSuite.App.Forms
             ClientSize = new Size(560, 620);
             Font = new Font("Segoe UI", 9F);
 
+            try
+            {
+                var iconPath = System.IO.Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "billease.ico");
+                if (System.IO.File.Exists(iconPath)) Icon = new Icon(iconPath);
+            }
+            catch { }
+
             var header = new Label
             {
                 Text = _firstRun ? "Welcome - set up your account" : "Sign in to continue",
