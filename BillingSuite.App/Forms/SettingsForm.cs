@@ -535,6 +535,50 @@ namespace BillingSuite.App.Forms
             tp.Controls.Add(page); page.Dock = DockStyle.Fill;
 
             _y = 76;
+
+            SectionHeader(page, "Active Account & Data Security");
+            var u = AuthService.CurrentUser;
+            var lblAccountInfo = new Label
+            {
+                Text = u != null ? $"Logged in as: {u.FullName} ({u.Email})" : "Logged in as: Offline User Account",
+                Font = new Font("Segoe UI", 9.5F, FontStyle.Bold),
+                ForeColor = Color.DarkSlateBlue,
+                Location = new Point(20, _y),
+                AutoSize = true
+            };
+            var btnLogout = new Button
+            {
+                Text = "🚪 Log Out / Switch Account",
+                Location = new Point(390, _y - 4),
+                Size = new Size(220, 30),
+                FlatStyle = FlatStyle.Flat
+            };
+            btnLogout.Click += (s, e) =>
+            {
+                if (MessageBox.Show("Are you sure you want to log out of this account?", "Log Out", MessageBoxButtons.YesNo, MessageBoxIcon.Question) == DialogResult.Yes)
+                {
+                    AuthService.SignOut();
+                    var topForm = FindForm();
+                    if (topForm != null)
+                    {
+                        topForm.Hide();
+                        using var login = new LoginForm(firstRun: false);
+                        if (login.ShowDialog() == DialogResult.OK)
+                        {
+                            AppSettingsService.Invalidate();
+                            topForm.Show();
+                        }
+                        else
+                        {
+                            Application.Exit();
+                        }
+                    }
+                }
+            };
+            page.Controls.Add(lblAccountInfo);
+            page.Controls.Add(btnLogout);
+            _y += 36;
+
             BoolRow(page, AppSettingKeys.SyncEnabled, "Enable automatic cloud sync & backup",
                 "Keep your local records backed up to the cloud in the background.");
             NumberRow(page, AppSettingKeys.SyncIntervalMinutes, "Sync frequency (minutes)", 1, 1440, 15,

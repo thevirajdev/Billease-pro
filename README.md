@@ -1,38 +1,44 @@
-# Billease Pro - Modern Enterprise Billing & ERP Suite 🚀
+# Billease Pro - Modern Enterprise Billing & ERP Suite 💼
 
 > **Engineered & Automated by NexaAutomate**  
-> GitHub: [@thevirajdev](https://github.com/thevirajdev) | Social: [@thevirajrealm](https://instagram.com/thevirajrealm)
+> Lead Developer: [@thevirajdev](https://github.com/thevirajdev) | Official Updates: [@thevirajrealm](https://instagram.com/thevirajrealm)
 
 ---
 
-## 🌟 Overview
+## 🌟 Welcome to Billease Pro
 
-**Billease Pro** is a high-performance, enterprise-grade Desktop Billing, Inventory, and Accounting ERP solution built with **C# .NET 8** and **Windows Forms (with WPF Hardware Acceleration)**. Designed for modern retail, wholesale, and service enterprises, Billease Pro provides real-time multi-terminal database synchronization (powered by Supabase Cloud PostgreSQL), offline fallback, AI-assisted purchase invoice extraction, borderless animated splash screens, and customizable invoice templates.
+**Billease Pro** is a high-speed, enterprise-grade Billing, Inventory, Accounting, and Business Management ERP software crafted for retail stores, wholesalers, pharmacies, and service businesses. 
 
----
-
-## 📸 Key Highlights
-
-- **⚡ Borderless Video Splash Screen**: Smooth MP4 startup animation powered by WPF hardware-accelerated rendering.
-- **☁️ Supabase Cloud & Local SQLite Dual-Engine**: Secure direct PostgreSQL cloud connection pooling with automatic local SQLite offline caching.
-- **🤖 AI-Powered Purchase Import**: Upload PDF invoices directly to auto-extract items, quantities, rates, tax splits, and seller details without manual data entry.
-- **⚙️ Enterprise Centralized Configuration System**: 60+ configurable app options spanning Company Branding, Invoicing, Tax, Printing, Database, Security, Theme, and Notifications.
-- **📄 Advanced Invoice Customizer**: Real-time toggling of Terms & Conditions, Bank Details, QR Codes, Tax Summaries, and Logo positioning across PDF generation, Editor, and Thermal/A4 Printing.
-- **♻️ Detailed Audit & Recycle Bin**: Human-readable soft-delete recovery system showing item names, deleted timestamp, category, and restored attributes instead of raw JSON.
-- **📦 Legacy Data Importer & Full Data Backup System**: Full `.bak` snapshot export/import engine with structural version migration.
-- **📖 Embedded In-App Manual**: Built-in User Manual & Developer Guide accessible directly from the Help menu (`F1`).
+Designed with an **Offline-First Architecture**, Billease Pro ensures your business operations never stop even when your internet connection is down. Every sale, purchase, customer ledger, and inventory update is processed instantly on your device with zero latency, while being automatically backed up and synchronized to secure cloud storage whenever internet access is available.
 
 ---
 
-## 🛠️ Technology Stack
+## ✨ Key Features & Capabilities
 
-- **Framework**: .NET 8.0 (C# 12)
-- **UI Framework**: WinForms + WPF `ElementHost` (for hardware-accelerated media & SVG rendering)
-- **Database Engine**: 
-  - **Cloud**: Supabase PostgreSQL (via Npgsql Connection Pooling)
-  - **Local**: SQLite / EF Core 8.0
-- **PDF & Reporting**: QuestPDF / iTextSharp / System.Drawing.Printing
-- **Installer**: Inno Setup 6 (Custom Win32 Setup Wizard)
+### ⚡ 100% Offline-First Core with Auto Cloud Backup
+- **Zero Latency Billing**: Create invoices, process payments, and manage stock at lightning speed without relying on an active internet connection.
+- **Automated Cloud Backup**: Whenever connected to the internet, your business data automatically backs up to the cloud in the background.
+- **Multi-Device Cloud Restore**: Setting up a new PC or switching devices? Log into your account and restore your entire business history with a single click.
+
+### 🔐 Multi-User Security & Isolated Accounts
+- **Complete Account Data Isolation**: Every business account is strictly isolated. Multiple users or businesses on the same system or enterprise database can never view or modify each other's invoices, customers, or financial records.
+- **Quick Account Switching**: Switch between business accounts or log out securely directly from the Settings tab.
+
+### 🤖 AI-Powered Purchase & Invoice Import
+- **Instant PDF Extraction**: Upload vendor PDF invoices directly into Billease Pro. The built-in AI automatically extracts vendor details, product names, quantities, cost prices, and tax splits, eliminating manual data entry errors.
+
+### ⚙️ Customizable Invoice & Printing Engine
+- **Custom Invoice Layouts**: Toggle company details, customer address blocks, tax summaries, payment QR codes, bank info, and terms & conditions on or off.
+- **Multi-Format Printing**: Seamless support for Thermal Receipt Printers (58mm, 80mm) and Standard Document Printers (A4, A5, Letter).
+- **PDF Generation & Export**: Generate clean PDF invoices and share via WhatsApp or Email.
+
+### ♻️ Intelligent Audit & Data Recovery
+- **Human-Readable Recycle Bin**: Accidentally deleted an invoice, product, or customer? Restore it easily from the Recycle Bin with full details showing what was deleted, when, and by whom.
+- **Full System Backup (`.bak`)**: Create encrypted full system snapshots anytime for offsite storage or archival.
+
+### 🎨 Modern Animated Startup & Premium UI
+- **Animated Startup Experience**: Features a sleek, modern startup animation before loading your business workspace.
+- **Built-in Interactive User Manual**: Access step-by-step guidance, keyboard shortcuts, and feature instructions anytime by pressing `F1`.
 
 ---
 
@@ -40,70 +46,33 @@
 
 | Shortcut | Action |
 | :--- | :--- |
-| `F1` | Open User Manual & Documentation |
+| `F1` | Open Interactive User Manual & Help |
 | `F2` | New POS Invoice / Quick Sale |
-| `F3` | Item Master / Inventory Search |
-| `F4` | Customer Ledger & Quick Add |
+| `F3` | Product Inventory & Stock Master |
+| `F4` | Customer Ledger & Accounts |
 | `F5` | Refresh Live Cloud Data |
 | `Ctrl + P` | Print Current Invoice |
-| `Ctrl + S` | Save / Finalize Bill |
-| `Ctrl + Shift + B` | System Data Backup (`.bak`) |
+| `Ctrl + S` | Save / Finalize Invoice |
+| `Ctrl + Shift + B` | Take Instant System Backup (`.bak`) |
 | `Escape` | Close Modal / Cancel Action |
 
 ---
 
-## ⚙️ Configuration & Database Setup
+## 🚀 Quick Setup & Installation
 
-Billease Pro utilizes an encrypted enterprise `AppSettings.cs` architecture stored locally in `%AppData%/BilleasePro/config.json`.
-
-### Supabase Cloud Connection String
-To configure your cloud database, set the connection string in your deployment environment or `config.json`:
-
-```text
-postgresql://postgres.biptbwyfuzcuzufhustj:[PASSWORD]@aws-0-ap-southeast-1.pooler.supabase.com:5432/postgres
-```
-
-> **Security Note**: Database connection secrets are compiled into protected binary memory and handled via environment variables / user-restricted AppData storage to prevent reverse engineering.
+1. **Download & Install**: Run `BilleasePro_Setup.exe` to launch the modern installation wizard.
+2. **Account Setup**: Launch Billease Pro. On the initial startup, create your business account and enter your company profile (Name, Address, Tax Number, Phone).
+3. **Start Billing**: Start adding products, making sales, and generating professional invoices instantly!
+4. **Cloud Restore (New Device)**: On a new device, simply sign into your account and click **Restore Cloud Data** to sync your existing business database seamlessly.
 
 ---
 
-## 🚀 Building & Publishing
+## 👨‍💻 Developer & Author Credits
 
-### 1. Prerequisites
-- Windows 10/11 x64
-- [.NET 8.0 SDK](https://dotnet.microsoft.com/download/dotnet/8.0)
-- [Inno Setup 6](https://jrsoftware.org/isdl.php) (for building installer executable)
-
-### 2. Build Release Executable
-```powershell
-dotnet clean
-dotnet build -c Release
-```
-
-### 3. Run Self-Diagnostic Tests
-```powershell
-dotnet run -c Release --project BillingSuite.App/BillingSuite.App.csproj -- --settings-selftest
-```
-
-### 4. Publish Standalone Win-x64 Application
-```powershell
-dotnet publish BillingSuite.App/BillingSuite.App.csproj -c Release -r win-x64 --self-contained true /p:PublishSingleFile=false
-```
-
-### 5. Generate Installer Package (`BilleasePro_Setup.exe`)
-```powershell
-& "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" installer.iss
-```
-*Outputs installer to `./publish_output/BilleasePro_Setup.exe`*
-
----
-
-## 👨‍💻 Author & Credits
-
-Designed, Developed & Maintained by **NexaAutomate**.
+Billease Pro is developed and maintained by **NexaAutomate Studio**.
 
 - **Lead Developer**: [@thevirajdev](https://github.com/thevirajdev)
-- **Social Profile**: [@thevirajrealm](https://instagram.com/thevirajrealm)
-- **Repository**: [https://github.com/thevirajdev/Billease-pro](https://github.com/thevirajdev/Billease-pro)
+- **Official Social Profile**: [@thevirajrealm](https://x.com/thevirajrealm)
+- **GitHub Repository**: [https://github.com/thevirajdev/Billease-pro](https://github.com/thevirajdev/Billease-pro)
 
 *Copyright © 2026 NexaAutomate. All rights reserved.*

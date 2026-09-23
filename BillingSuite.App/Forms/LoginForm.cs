@@ -121,11 +121,68 @@ namespace BillingSuite.App.Forms
             btnSignIn.Height = 32;
             btnSignIn.Click += BtnSignIn_Click;
 
+            var btnCloudRestore = new Button
+            {
+                Text = "⬇ Restore Cloud Data for this Account (New Device)",
+                Width = 320,
+                Height = 32,
+                Margin = new Padding(0, 10, 0, 0),
+                FlatStyle = FlatStyle.Flat
+            };
+            btnCloudRestore.Click += async (s, e) =>
+            {
+                lblSignInError.Text = string.Empty;
+                var (ok, error) = AuthService.SignIn(txtSignInEmail.Text, txtSignInPassword.Text);
+                if (!ok)
+                {
+                    lblSignInError.Text = error;
+                    txtSignInPassword.SelectAll();
+                    txtSignInPassword.Focus();
+                    return;
+                }
+
+                btnCloudRestore.Enabled = false;
+                lblSignInError.ForeColor = Color.DarkSlateBlue;
+                lblSignInError.Text = "Connecting to cloud backend and pulling account data...";
+
+                var connStr = CloudDbConfig.GetConnectionString();
+                if (string.IsNullOrWhiteSpace(connStr))
+                    connStr = AppSettingsService.SyncConnectionString;
+
+                if (string.IsNullOrWhiteSpace(connStr))
+                {
+                    lblSignInError.ForeColor = Color.Firebrick;
+                    lblSignInError.Text = "Cloud backend is not configured by admin yet.";
+                    btnCloudRestore.Enabled = true;
+                    return;
+                }
+
+                var (pullOk, pullMsg) = await OnlineDatabaseService.PullFromCloudAsync(connStr, AuthService.CurrentUser?.Id);
+                btnCloudRestore.Enabled = true;
+
+                if (pullOk)
+                {
+                    MessageBox.Show($"Cloud Restore Successful!\n\nAll business records for {AuthService.CurrentUser?.Email} have been restored to this device.",
+                        "Cloud Restore Complete", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    DialogResult = DialogResult.OK;
+                    Close();
+                }
+                else
+                {
+                    lblSignInError.ForeColor = Color.Firebrick;
+                    lblSignInError.Text = pullMsg;
+                }
+            };
+
+            var flowAction = new FlowLayoutPanel { AutoSize = true, FlowDirection = FlowDirection.LeftToRight };
+            flowAction.Controls.Add(btnSignIn);
+            flowAction.Controls.Add(btnCloudRestore);
+
             host.Controls.Add(FieldLabel("Email"));
             host.Controls.Add(txtSignInEmail);
             host.Controls.Add(FieldLabel("Password"));
             host.Controls.Add(txtSignInPassword);
-            host.Controls.Add(btnSignIn);
+            host.Controls.Add(flowAction);
             host.Controls.Add(lblSignInError);
             tabSignIn.Controls.Add(host);
         }
