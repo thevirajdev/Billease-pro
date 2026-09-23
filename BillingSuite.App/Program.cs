@@ -63,8 +63,12 @@ static class Program
             Services.DatabaseUtils.RunAutoBackupIfDue();
             Services.DatabaseUtils.PurgeExpiredRecycleBin();
 
-            // Start background cloud sync engine
+            // Start background cloud sync engine & register 24/7 Windows Scheduled Task
             Services.SyncService.StartBackgroundWorker();
+            if (Services.AppSettingsService.SyncEnabled)
+            {
+                Services.SyncService.RegisterWindowsScheduledTask();
+            }
 
             // Borderless MP4 video splash screen animation on app startup
             try
