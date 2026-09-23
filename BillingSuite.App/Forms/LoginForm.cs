@@ -22,12 +22,20 @@ namespace BillingSuite.App.Forms
         private TabControl tabs = new();
         private TabPage tabSignIn = new("Sign In");
         private TabPage tabCreate = new("Create Account");
+        private TabPage tabForgot = new("Forgot Password");
 
         // Sign-in
         private TextBox txtSignInEmail = new();
         private TextBox txtSignInPassword = new();
         private Button btnSignIn = new();
         private Label lblSignInError = new();
+
+        // Forgot Password
+        private TextBox txtForgotEmail = new();
+        private TextBox txtForgotNewPassword = new();
+        private TextBox txtForgotConfirm = new();
+        private Button btnResetPassword = new();
+        private Label lblForgotStatus = new();
 
         // Create account
         private TextBox txtEmail = new();
@@ -80,14 +88,109 @@ namespace BillingSuite.App.Forms
             tabs.Padding = new Point(14, 6);
             BuildSignInTab();
             BuildCreateTab();
+            BuildForgotTab();
             tabs.TabPages.Add(tabSignIn);
             tabs.TabPages.Add(tabCreate);
+            tabs.TabPages.Add(tabForgot);
             tabs.SelectedIndex = _firstRun ? 1 : 0;
 
             Controls.Add(tabs);
             Controls.Add(header);
 
             AcceptButton = _firstRun ? btnCreate : btnSignIn;
+        }
+
+        private void BuildForgotTab()
+        {
+            tabForgot.Padding = new Padding(14);
+            var host = new TableLayoutPanel
+            {
+                Dock = DockStyle.Fill,
+                ColumnCount = 1,
+                RowCount = 9,
+                AutoScroll = true
+            };
+            for (int i = 0; i < 9; i++) host.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+
+            txtForgotEmail.Width = 470;
+            txtForgotNewPassword.Width = 470;
+            txtForgotNewPassword.UseSystemPasswordChar = true;
+            txtForgotConfirm.Width = 470;
+            txtForgotConfirm.UseSystemPasswordChar = true;
+
+            lblForgotStatus.ForeColor = Color.Firebrick;
+            lblForgotStatus.AutoSize = true;
+
+            btnResetPassword.Text = "🔐 Reset Password (Supabase Cloud)";
+            btnResetPassword.Width = 280;
+            btnResetPassword.Height = 34;
+            btnResetPassword.Click += async (s, e) =>
+            {
+                lblForgotStatus.Text = string.Empty;
+                var email = txtForgotEmail.Text.Trim();
+                var pass = txtForgotNewPassword.Text;
+                var confirm = txtForgotConfirm.Text;
+
+                if (string.IsNullOrWhiteSpace(email))
+                {
+                    lblForgotStatus.ForeColor = Color.Firebrick;
+                    lblForgotStatus.Text = "Please enter your registered email address.";
+                    return;
+                }
+                if (string.IsNullOrWhiteSpace(pass) || pass.Length < 6)
+                {
+                    lblForgotStatus.ForeColor = Color.Firebrick;
+                    lblForgotStatus.Text = "New password must be at least 6 characters.";
+                    return;
+                }
+                if (pass != confirm)
+                {
+                    lblForgotStatus.ForeColor = Color.Firebrick;
+                    lblForgotStatus.Text = "The two passwords do not match.";
+                    return;
+                }
+
+                btnResetPassword.Enabled = false;
+                lblForgotStatus.ForeColor = Color.DarkSlateBlue;
+                lblForgotStatus.Text = "Connecting to Supabase Cloud and resetting password...";
+
+                var connStr = CloudDbConfig.GetConnectionString();
+                if (string.IsNullOrWhiteSpace(connStr))
+                {
+                    lblForgotStatus.ForeColor = Color.Firebrick;
+                    lblForgotStatus.Text = "Cloud database connection is not configured.";
+                    btnResetPassword.Enabled = true;
+                    return;
+                }
+
+                var (ok, msg) = await OnlineDatabaseService.CloudResetPasswordAsync(connStr, email, pass);
+                btnResetPassword.Enabled = true;
+
+                if (ok)
+                {
+                    lblForgotStatus.ForeColor = Color.SeaGreen;
+                    lblForgotStatus.Text = "Password reset successfully! You can now sign in with your new password.";
+                    MessageBox.Show("Password reset successfully! Please sign in with your new password.", "Password Reset Complete", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    tabs.SelectedTab = tabSignIn;
+                    txtSignInEmail.Text = email;
+                    txtSignInPassword.Text = pass;
+                }
+                else
+                {
+                    lblForgotStatus.ForeColor = Color.Firebrick;
+                    lblForgotStatus.Text = msg;
+                }
+            };
+
+            host.Controls.Add(FieldLabel("Registered Account Email"));
+            host.Controls.Add(txtForgotEmail);
+            host.Controls.Add(FieldLabel("New Password (min 6 characters)"));
+            host.Controls.Add(txtForgotNewPassword);
+            host.Controls.Add(FieldLabel("Confirm New Password"));
+            host.Controls.Add(txtForgotConfirm);
+            host.Controls.Add(btnResetPassword);
+            host.Controls.Add(lblForgotStatus);
+            tabForgot.Controls.Add(host);
         }
 
         private static Label FieldLabel(string text) => new()

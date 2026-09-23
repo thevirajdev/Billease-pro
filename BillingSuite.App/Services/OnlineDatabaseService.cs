@@ -803,5 +803,161 @@ namespace BillingSuite.App.Services
                 return (false, $"Cloud restore failed: {ex.Message}");
             }
         }
+
+        // =========================================================================
+        // SUPABASE CLOUD USER AUTHENTICATION & SYNC
+        // =========================================================================
+
+        public static async Task<(bool Success, string Message)> CloudRegisterUserAsync(string connectionString, AppUser user)
+        {
+            if (string.IsNullOrWhiteSpace(connectionString) || user == null)
+                return (false, "Cloud connection or user profile invalid.");
+
+            try
+            {
+                var normalized = NormalizeConnectionString(connectionString);
+                await using var conn = new NpgsqlConnection(normalized);
+                await conn.OpenAsync();
+
+                // Ensure app_users table exists
+                await EnsureSchemaAsync(connectionString);
+
+                var sql = @"
+                    INSERT INTO app_users (email, password_hash, salt, iterations, full_name, phone, company_name, company_address, company_phone, company_email, company_tax_number, created_at)
+                    VALUES (@email, @hash, @salt, @iters, @name, @phone, @cname, @caddr, @cphone, @cemail, @ctax, @created_at)
+                    ON CONFLICT (email) DO UPDATE SET
+                        password_hash = EXCLUDED.password_hash,
+                        salt = EXCLUDED.salt,
+                        iterations = EXCLUDED.iterations,
+                        full_name = EXCLUDED.full_name,
+                        phone = EXCLUDED.phone,
+                        company_name = EXCLUDED.company_name,
+                        company_address = EXCLUDED.company_address,
+                        company_phone = EXCLUDED.company_phone,
+                        company_email = EXCLUDED.company_email,
+                        company_tax_number = EXCLUDED.company_tax_number
+                    RETURNING id;";
+
+                await using var cmd = new NpgsqlCommand(sql, conn);
+                cmd.Parameters.AddWithValue("email", user.Email ?? "");
+                cmd.Parameters.AddWithValue("hash", user.PasswordHash ?? "");
+                cmd.Parameters.AddWithValue("salt", user.PasswordSalt ?? "");
+                cmd.Parameters.AddWithValue("iters", user.PasswordIterations > 0 ? user.PasswordIterations : 210000);
+                cmd.Parameters.AddWithValue("name", (object?)user.FullName ?? DBNull.Value);
+                cmd.Parameters.AddWithValue("phone", (object?)user.Phone ?? DBNull.Value);
+                cmd.Parameters.AddWithValue("cname", (object?)user.CompanyName ?? DBNull.Value);
+                cmd.Parameters.AddWithValue("caddr", (object?)user.CompanyAddress ?? DBNull.Value);
+                cmd.Parameters.AddWithValue("cphone", (object?)user.CompanyPhone ?? DBNull.Value);
+                cmd.Parameters.AddWithValue("cemail", (object?)user.CompanyEmail ?? DBNull.Value);
+                cmd.Parameters.AddWithValue("ctax", (object?)user.CompanyTaxNumber ?? DBNull.Value);
+                cmd.Parameters.AddWithValue("created_at", user.CreatedAt);
+
+                var cloudId = await cmd.ExecuteScalarAsync();
+                if (cloudId != null && int.TryParse(cloudId.ToString(), out var id) && id > 0)
+                {
+                    user.Id = id;
+                }
+
+                return (true, "Account registered in Supabase Cloud successfully.");
+            }
+            catch (Exception ex)
+            {
+                return (false, $"Cloud registration failed: {ex.Message}");
+            }
+        }
+
+        public static async Task<(bool Success, AppUser? User, string Message)> CloudAuthenticateUserAsync(string connectionString, string email, string password)
+        {
+            if (string.IsNullOrWhiteSpace(connectionString))
+                return (false, null, "Connection string is empty.");
+
+            email = (email ?? "").Trim().ToLowerInvariant();
+            if (string.IsNullOrWhiteSpace(email) || string.IsNullOrWhiteSpace(password))
+                return (false, null, "Email and password are required.");
+
+            try
+            {
+                var normalized = NormalizeConnectionString(connectionString);
+                await using var conn = new NpgsqlConnection(normalized);
+                await conn.OpenAsync();
+
+                var sql = "SELECT id, email, password_hash, salt, iterations, full_name, phone, company_name, company_address, company_phone, company_email, company_tax_number, created_at FROM app_users WHERE email = @email LIMIT 1;";
+                await using var cmd = new NpgsqlCommand(sql, conn);
+                cmd.Parameters.AddWithValue("email", email);
+
+                await using var rdr = await cmd.ExecuteReaderAsync();
+                if (!await rdr.ReadAsync())
+                {
+                    return (false, null, "No account found with that email in Supabase Cloud.");
+                }
+
+                var user = new AppUser
+                {
+                    Id = rdr.GetInt32(0),
+                    Email = rdr.GetString(1),
+                    PasswordHash = rdr.GetString(2),
+                    PasswordSalt = rdr.GetString(3),
+                    PasswordIterations = rdr.GetInt32(4),
+                    FullName = rdr.IsDBNull(5) ? "" : rdr.GetString(5),
+                    Phone = rdr.IsDBNull(6) ? null : rdr.GetString(6),
+                    CompanyName = rdr.IsDBNull(7) ? null : rdr.GetString(7),
+                    CompanyAddress = rdr.IsDBNull(8) ? null : rdr.GetString(8),
+                    CompanyPhone = rdr.IsDBNull(9) ? null : rdr.GetString(9),
+                    CompanyEmail = rdr.IsDBNull(10) ? null : rdr.GetString(10),
+                    CompanyTaxNumber = rdr.IsDBNull(11) ? null : rdr.GetString(11),
+                    CreatedAt = rdr.GetDateTime(12)
+                };
+
+                if (!AuthService.Verify(password, user))
+                {
+                    return (false, null, "Incorrect password.");
+                }
+
+                return (true, user, "Authenticated via Supabase Cloud successfully.");
+            }
+            catch (Exception ex)
+            {
+                return (false, null, $"Cloud authentication error: {ex.Message}");
+            }
+        }
+
+        public static async Task<(bool Success, string Message)> CloudResetPasswordAsync(string connectionString, string email, string newPassword)
+        {
+            if (string.IsNullOrWhiteSpace(connectionString))
+                return (false, "Connection string is empty.");
+
+            email = (email ?? "").Trim().ToLowerInvariant();
+            if (string.IsNullOrWhiteSpace(email) || string.IsNullOrWhiteSpace(newPassword) || newPassword.Length < 6)
+                return (false, "Enter a valid email and new password (min 6 chars).");
+
+            try
+            {
+                var normalized = NormalizeConnectionString(connectionString);
+                await using var conn = new NpgsqlConnection(normalized);
+                await conn.OpenAsync();
+
+                var saltBytes = System.Security.Cryptography.RandomNumberGenerator.GetBytes(16);
+                var salt = Convert.ToBase64String(saltBytes);
+                var iterations = 210000;
+                var hashBytes = System.Security.Cryptography.Rfc2898DeriveBytes.Pbkdf2(newPassword, saltBytes, iterations, System.Security.Cryptography.HashAlgorithmName.SHA256, 32);
+                var hash = Convert.ToBase64String(hashBytes);
+
+                var sql = "UPDATE app_users SET password_hash = @hash, salt = @salt, iterations = @iters WHERE email = @email;";
+                await using var cmd = new NpgsqlCommand(sql, conn);
+                cmd.Parameters.AddWithValue("hash", hash);
+                cmd.Parameters.AddWithValue("salt", salt);
+                cmd.Parameters.AddWithValue("iters", iterations);
+                cmd.Parameters.AddWithValue("email", email);
+
+                int rows = await cmd.ExecuteNonQueryAsync();
+                if (rows == 0) return (false, "No account found with that email in Supabase Cloud.");
+
+                return (true, "Password reset successfully in Supabase Cloud.");
+            }
+            catch (Exception ex)
+            {
+                return (false, $"Password reset failed: {ex.Message}");
+            }
+        }
     }
 }

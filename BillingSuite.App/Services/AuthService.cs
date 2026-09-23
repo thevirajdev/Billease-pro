@@ -108,8 +108,9 @@ namespace BillingSuite.App.Services
             try
             {
                 using var db = new AppDbContext();
-                if (db.Users.Any(u => u.Email == email))
-                    return (false, "An account with that email already exists on this device.");
+                var existingUser = db.Users.FirstOrDefault(u => u.Email == email);
+                if (existingUser != null)
+                    return (false, "An account with that email already exists.");
 
                 var salt = RandomNumberGenerator.GetBytes(SaltBytes);
                 var user = new AppUser
@@ -130,6 +131,25 @@ namespace BillingSuite.App.Services
                 user.PasswordHash = Convert.ToBase64String(
                     Rfc2898DeriveBytes.Pbkdf2(password, salt, user.PasswordIterations, HashAlgorithmName.SHA256, HashBytes));
 
+                // 1. Try Supabase Cloud Registration if cloud DB is configured
+                var connStr = CloudDbConfig.GetConnectionString();
+                if (!string.IsNullOrWhiteSpace(connStr) && SyncService.IsNetworkAvailable())
+                {
+                    try
+                    {
+                        var (cloudOk, cloudMsg) = OnlineDatabaseService.CloudRegisterUserAsync(connStr, user).GetAwaiter().GetResult();
+                        if (!cloudOk)
+                        {
+                            Console.WriteLine("Cloud user registration warning: " + cloudMsg);
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine("Cloud user registration exception: " + ex.Message);
+                    }
+                }
+
+                // 2. Save user locally in SQLite for offline access
                 db.Users.Add(user);
                 db.SaveChanges();
 
@@ -152,18 +172,71 @@ namespace BillingSuite.App.Services
 
             try
             {
+                var connStr = CloudDbConfig.GetConnectionString();
+                AppUser? cloudUser = null;
+
+                // 1. If online, try Supabase Cloud Authentication first (multi-device access)
+                if (!string.IsNullOrWhiteSpace(connStr) && SyncService.IsNetworkAvailable())
+                {
+                    try
+                    {
+                        var (cloudOk, userFromCloud, cloudMsg) = OnlineDatabaseService.CloudAuthenticateUserAsync(connStr, email, password).GetAwaiter().GetResult();
+                        if (cloudOk && userFromCloud != null)
+                        {
+                            cloudUser = userFromCloud;
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine("Cloud authentication warning: " + ex.Message);
+                    }
+                }
+
                 using var db = new AppDbContext();
-                var user = db.Users.FirstOrDefault(u => u.Email == email);
-                if (user == null)
-                    return (false, "No account found with that email on this device.");
-                if (user.DisabledAt.HasValue)
-                    return (false, "This account has been disabled.");
+                AppUser? user = null;
 
-                if (!Verify(password, user))
-                    return (false, "Incorrect password.");
+                if (cloudUser != null)
+                {
+                    // Update/upsert local SQLite with Supabase Cloud user details
+                    user = db.Users.FirstOrDefault(u => u.Email == email);
+                    if (user == null)
+                    {
+                        user = cloudUser;
+                        db.Users.Add(user);
+                    }
+                    else
+                    {
+                        user.PasswordHash = cloudUser.PasswordHash;
+                        user.PasswordSalt = cloudUser.PasswordSalt;
+                        user.PasswordIterations = cloudUser.PasswordIterations;
+                        user.FullName = cloudUser.FullName;
+                        user.CompanyName = cloudUser.CompanyName;
+                        user.CompanyAddress = cloudUser.CompanyAddress;
+                        user.CompanyPhone = cloudUser.CompanyPhone;
+                        user.CompanyEmail = cloudUser.CompanyEmail;
+                        user.CompanyTaxNumber = cloudUser.CompanyTaxNumber;
+                    }
+                    user.LastLoginAt = DateTime.UtcNow;
+                    db.SaveChanges();
 
-                user.LastLoginAt = DateTime.UtcNow;
-                db.SaveChanges();
+                    // Auto-pull user's business database records from Supabase Cloud
+                    _ = OnlineDatabaseService.PullFromCloudAsync(connStr, user.Id);
+                }
+                else
+                {
+                    // Fallback to local SQLite offline authentication
+                    user = db.Users.FirstOrDefault(u => u.Email == email);
+                    if (user == null)
+                        return (false, "No account found with that email. Please check your credentials or create an account.");
+                    if (user.DisabledAt.HasValue)
+                        return (false, "This account has been disabled.");
+
+                    if (!Verify(password, user))
+                        return (false, "Incorrect password.");
+
+                    user.LastLoginAt = DateTime.UtcNow;
+                    db.SaveChanges();
+                }
 
                 CurrentUser = user;
                 AppSettingsService.Set("ActiveSessionUserId", user.Id.ToString());
