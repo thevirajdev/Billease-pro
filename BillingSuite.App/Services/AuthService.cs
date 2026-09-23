@@ -91,7 +91,7 @@ namespace BillingSuite.App.Services
             }
         }
 
-        public static (bool ok, string error) Register(string email, string password, string fullName,
+        public static async System.Threading.Tasks.Task<(bool ok, string error)> RegisterAsync(string email, string password, string fullName,
             string? phone = null, string? companyName = null, string? companyAddress = null,
             string? companyPhone = null, string? companyEmail = null, string? companyTaxNumber = null)
         {
@@ -108,7 +108,7 @@ namespace BillingSuite.App.Services
             try
             {
                 using var db = new AppDbContext();
-                var existingUser = db.Users.FirstOrDefault(u => u.Email == email);
+                var existingUser = await db.Users.FirstOrDefaultAsync(u => u.Email == email);
                 if (existingUser != null)
                     return (false, "An account with that email already exists.");
 
@@ -137,7 +137,7 @@ namespace BillingSuite.App.Services
                 {
                     try
                     {
-                        var (cloudOk, cloudMsg) = OnlineDatabaseService.CloudRegisterUserAsync(connStr, user).GetAwaiter().GetResult();
+                        var (cloudOk, cloudMsg) = await OnlineDatabaseService.CloudRegisterUserAsync(connStr, user);
                         if (!cloudOk)
                         {
                             Console.WriteLine("Cloud user registration warning: " + cloudMsg);
@@ -151,7 +151,7 @@ namespace BillingSuite.App.Services
 
                 // 2. Save user locally in SQLite for offline access
                 db.Users.Add(user);
-                db.SaveChanges();
+                await db.SaveChangesAsync();
 
                 CurrentUser = user;
                 AppSettingsService.Set("ActiveSessionUserId", user.Id.ToString());
@@ -164,7 +164,14 @@ namespace BillingSuite.App.Services
             }
         }
 
-        public static (bool ok, string error) SignIn(string email, string password)
+        public static (bool ok, string error) Register(string email, string password, string fullName,
+            string? phone = null, string? companyName = null, string? companyAddress = null,
+            string? companyPhone = null, string? companyEmail = null, string? companyTaxNumber = null)
+        {
+            return RegisterAsync(email, password, fullName, phone, companyName, companyAddress, companyPhone, companyEmail, companyTaxNumber).GetAwaiter().GetResult();
+        }
+
+        public static async System.Threading.Tasks.Task<(bool ok, string error)> SignInAsync(string email, string password)
         {
             email = (email ?? string.Empty).Trim().ToLowerInvariant();
             if (string.IsNullOrWhiteSpace(email) || string.IsNullOrWhiteSpace(password))
@@ -180,7 +187,7 @@ namespace BillingSuite.App.Services
                 {
                     try
                     {
-                        var (cloudOk, userFromCloud, cloudMsg) = OnlineDatabaseService.CloudAuthenticateUserAsync(connStr, email, password).GetAwaiter().GetResult();
+                        var (cloudOk, userFromCloud, cloudMsg) = await OnlineDatabaseService.CloudAuthenticateUserAsync(connStr, email, password);
                         if (cloudOk && userFromCloud != null)
                         {
                             cloudUser = userFromCloud;
@@ -198,7 +205,7 @@ namespace BillingSuite.App.Services
                 if (cloudUser != null)
                 {
                     // Update/upsert local SQLite with Supabase Cloud user details
-                    user = db.Users.FirstOrDefault(u => u.Email == email);
+                    user = await db.Users.FirstOrDefaultAsync(u => u.Email == email);
                     if (user == null)
                     {
                         user = cloudUser;
@@ -217,7 +224,7 @@ namespace BillingSuite.App.Services
                         user.CompanyTaxNumber = cloudUser.CompanyTaxNumber;
                     }
                     user.LastLoginAt = DateTime.UtcNow;
-                    db.SaveChanges();
+                    await db.SaveChangesAsync();
 
                     // Auto-pull user's business database records from Supabase Cloud
                     _ = OnlineDatabaseService.PullFromCloudAsync(connStr, user.Id);
@@ -225,7 +232,7 @@ namespace BillingSuite.App.Services
                 else
                 {
                     // Fallback to local SQLite offline authentication
-                    user = db.Users.FirstOrDefault(u => u.Email == email);
+                    user = await db.Users.FirstOrDefaultAsync(u => u.Email == email);
                     if (user == null)
                         return (false, "No account found with that email. Please check your credentials or create an account.");
                     if (user.DisabledAt.HasValue)
@@ -235,7 +242,7 @@ namespace BillingSuite.App.Services
                         return (false, "Incorrect password.");
 
                     user.LastLoginAt = DateTime.UtcNow;
-                    db.SaveChanges();
+                    await db.SaveChangesAsync();
                 }
 
                 CurrentUser = user;
@@ -247,6 +254,11 @@ namespace BillingSuite.App.Services
             {
                 return (false, $"Could not sign in: {ex.Message}");
             }
+        }
+
+        public static (bool ok, string error) SignIn(string email, string password)
+        {
+            return SignInAsync(email, password).GetAwaiter().GetResult();
         }
 
         /// <summary>

@@ -1,55 +1,56 @@
 using System;
 using System.Drawing;
+using System.Threading.Tasks;
 using System.Windows.Forms;
 using BillingSuite.App.Services;
 
 namespace BillingSuite.App.Forms
 {
     /// <summary>
-    /// Sign-in / account creation shown before the main window opens.
-    ///
-    /// First run (no accounts on this device) opens on the Create Account tab and also
-    /// captures the company profile, so the user is never dropped into an app with
-    /// company details still reading "Your Company".
-    ///
-    /// Later runs open on Sign In. Passwords are verified by AuthService; this form
-    /// never sees or stores a plaintext password beyond the textbox.
+    /// Modern Sign-In and Sign-Up form for Billease Pro.
+    /// Clean card layout, non-blocking asynchronous cloud authentication,
+    /// and instant forgot-password recovery flow.
     /// </summary>
     public class LoginForm : Form
     {
         private readonly bool _firstRun;
 
-        private TabControl tabs = new();
-        private TabPage tabSignIn = new("Sign In");
-        private TabPage tabCreate = new("Create Account");
-        private TabPage tabForgot = new("Forgot Password");
+        private Panel pnlHeader = new();
+        private Label lblHeaderTitle = new();
+        private Label lblHeaderSub = new();
 
-        // Sign-in
+        private Panel pnlNav = new();
+        private Button btnNavSignIn = new();
+        private Button btnNavCreate = new();
+
+        private Panel pnlCardsHost = new();
+        private Panel cardSignIn = new();
+        private Panel cardCreate = new();
+        private Panel cardForgot = new();
+
+        // Sign In Card Controls
         private TextBox txtSignInEmail = new();
         private TextBox txtSignInPassword = new();
         private Button btnSignIn = new();
-        private Label lblSignInError = new();
+        private LinkLabel lnkForgotPass = new();
+        private Button btnCloudRestore = new();
+        private Label lblSignInStatus = new();
 
-        // Forgot Password
+        // Create Account Card Controls
+        private TextBox txtCreateEmail = new();
+        private TextBox txtCreateFullName = new();
+        private TextBox txtCreatePassword = new();
+        private TextBox txtCreateConfirm = new();
+        private Button btnCreate = new();
+        private Label lblCreateStatus = new();
+
+        // Forgot Password Card Controls
         private TextBox txtForgotEmail = new();
         private TextBox txtForgotNewPassword = new();
         private TextBox txtForgotConfirm = new();
-        private Button btnResetPassword = new();
+        private Button btnForgotReset = new();
+        private LinkLabel lnkBackToSignIn = new();
         private Label lblForgotStatus = new();
-
-        // Create account
-        private TextBox txtEmail = new();
-        private TextBox txtPassword = new();
-        private TextBox txtConfirm = new();
-        private TextBox txtFullName = new();
-        private TextBox txtPhone = new();
-        private TextBox txtCompany = new();
-        private TextBox txtCompanyAddress = new();
-        private TextBox txtCompanyPhone = new();
-        private TextBox txtCompanyEmail = new();
-        private TextBox txtCompanyTax = new();
-        private Button btnCreate = new();
-        private Label lblCreateError = new();
 
         public LoginForm(bool firstRun)
         {
@@ -59,13 +60,14 @@ namespace BillingSuite.App.Forms
 
         private void BuildUi()
         {
-            Text = _firstRun ? "Billing Suite - First Time Setup" : "Billing Suite - Sign In";
+            Text = _firstRun ? "Billease Pro - Account Setup" : "Billease Pro - Sign In";
             StartPosition = FormStartPosition.CenterScreen;
             FormBorderStyle = FormBorderStyle.FixedDialog;
             MaximizeBox = false;
             MinimizeBox = false;
-            ClientSize = new Size(560, 620);
-            Font = new Font("Segoe UI", 9F);
+            ClientSize = new Size(460, 560);
+            Font = new Font("Segoe UI", 9.5F);
+            BackColor = Color.FromArgb(248, 250, 252);
 
             try
             {
@@ -74,194 +76,415 @@ namespace BillingSuite.App.Forms
             }
             catch { }
 
-            var header = new Label
-            {
-                Text = _firstRun ? "Welcome - set up your account" : "Sign in to continue",
-                Font = new Font("Segoe UI", 13F, FontStyle.Bold),
-                Dock = DockStyle.Top,
-                Height = 44,
-                TextAlign = ContentAlignment.MiddleLeft,
-                Padding = new Padding(14, 0, 0, 0)
-            };
+            // 1. Header Banner
+            pnlHeader.Dock = DockStyle.Top;
+            pnlHeader.Height = 75;
+            pnlHeader.BackColor = Color.FromArgb(15, 23, 42); // Dark Slate
+            pnlHeader.Padding = new Padding(20, 14, 20, 10);
 
-            tabs.Dock = DockStyle.Fill;
-            tabs.Padding = new Point(14, 6);
-            BuildSignInTab();
-            BuildCreateTab();
-            BuildForgotTab();
-            tabs.TabPages.Add(tabSignIn);
-            tabs.TabPages.Add(tabCreate);
-            tabs.TabPages.Add(tabForgot);
-            tabs.SelectedIndex = _firstRun ? 1 : 0;
+            lblHeaderTitle.Text = "Billease Pro";
+            lblHeaderTitle.Font = new Font("Segoe UI", 15F, FontStyle.Bold);
+            lblHeaderTitle.ForeColor = Color.White;
+            lblHeaderTitle.Dock = DockStyle.Top;
+            lblHeaderTitle.AutoSize = true;
 
-            Controls.Add(tabs);
-            Controls.Add(header);
+            lblHeaderSub.Text = _firstRun ? "Create your account to start billing" : "Sign in to access your business account";
+            lblHeaderSub.Font = new Font("Segoe UI", 9F);
+            lblHeaderSub.ForeColor = Color.FromArgb(148, 163, 184);
+            lblHeaderSub.Dock = DockStyle.Top;
+            lblHeaderSub.AutoSize = true;
 
-            AcceptButton = _firstRun ? btnCreate : btnSignIn;
+            pnlHeader.Controls.Add(lblHeaderSub);
+            pnlHeader.Controls.Add(lblHeaderTitle);
+
+            // 2. Navigation Switcher (Sign In vs Create Account)
+            pnlNav.Dock = DockStyle.Top;
+            pnlNav.Height = 44;
+            pnlNav.BackColor = Color.White;
+            pnlNav.Padding = new Padding(12, 6, 12, 6);
+
+            btnNavSignIn.Text = "Sign In";
+            btnNavSignIn.Size = new Size(210, 32);
+            btnNavSignIn.Location = new Point(12, 6);
+            btnNavSignIn.FlatStyle = FlatStyle.Flat;
+            btnNavSignIn.FlatAppearance.BorderSize = 0;
+            btnNavSignIn.Font = new Font("Segoe UI", 9.5F, FontStyle.Bold);
+            btnNavSignIn.Click += (s, e) => ShowCard(cardSignIn);
+
+            btnNavCreate.Text = "Create Account";
+            btnNavCreate.Size = new Size(210, 32);
+            btnNavCreate.Location = new Point(228, 6);
+            btnNavCreate.FlatStyle = FlatStyle.Flat;
+            btnNavCreate.FlatAppearance.BorderSize = 0;
+            btnNavCreate.Font = new Font("Segoe UI", 9.5F, FontStyle.Bold);
+            btnNavCreate.Click += (s, e) => ShowCard(cardCreate);
+
+            pnlNav.Controls.Add(btnNavSignIn);
+            pnlNav.Controls.Add(btnNavCreate);
+
+            // 3. Cards Host Container
+            pnlCardsHost.Dock = DockStyle.Fill;
+            pnlCardsHost.Padding = new Padding(24, 16, 24, 16);
+
+            BuildSignInCard();
+            BuildCreateCard();
+            BuildForgotCard();
+
+            pnlCardsHost.Controls.Add(cardSignIn);
+            pnlCardsHost.Controls.Add(cardCreate);
+            pnlCardsHost.Controls.Add(cardForgot);
+
+            Controls.Add(pnlCardsHost);
+            Controls.Add(pnlNav);
+            Controls.Add(pnlHeader);
+
+            ShowCard(_firstRun ? cardCreate : cardSignIn);
         }
 
-        private void BuildForgotTab()
+        private void ShowCard(Panel card)
         {
-            tabForgot.Padding = new Padding(14);
-            var host = new TableLayoutPanel
+            cardSignIn.Visible = (card == cardSignIn);
+            cardCreate.Visible = (card == cardCreate);
+            cardForgot.Visible = (card == cardForgot);
+
+            pnlNav.Visible = (card != cardForgot);
+
+            if (card == cardSignIn)
             {
-                Dock = DockStyle.Fill,
-                ColumnCount = 1,
-                RowCount = 9,
-                AutoScroll = true
-            };
-            for (int i = 0; i < 9; i++) host.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-
-            txtForgotEmail.Width = 470;
-            txtForgotNewPassword.Width = 470;
-            txtForgotNewPassword.UseSystemPasswordChar = true;
-            txtForgotConfirm.Width = 470;
-            txtForgotConfirm.UseSystemPasswordChar = true;
-
-            lblForgotStatus.ForeColor = Color.Firebrick;
-            lblForgotStatus.AutoSize = true;
-
-            btnResetPassword.Text = "🔐 Reset Password (Supabase Cloud)";
-            btnResetPassword.Width = 280;
-            btnResetPassword.Height = 34;
-            btnResetPassword.Click += async (s, e) =>
+                btnNavSignIn.BackColor = Color.FromArgb(37, 99, 235);
+                btnNavSignIn.ForeColor = Color.White;
+                btnNavCreate.BackColor = Color.FromArgb(241, 245, 249);
+                btnNavCreate.ForeColor = Color.FromArgb(71, 85, 105);
+                AcceptButton = btnSignIn;
+                lblHeaderSub.Text = "Sign in to access your business account";
+            }
+            else if (card == cardCreate)
             {
-                lblForgotStatus.Text = string.Empty;
-                var email = txtForgotEmail.Text.Trim();
-                var pass = txtForgotNewPassword.Text;
-                var confirm = txtForgotConfirm.Text;
-
-                if (string.IsNullOrWhiteSpace(email))
-                {
-                    lblForgotStatus.ForeColor = Color.Firebrick;
-                    lblForgotStatus.Text = "Please enter your registered email address.";
-                    return;
-                }
-                if (string.IsNullOrWhiteSpace(pass) || pass.Length < 6)
-                {
-                    lblForgotStatus.ForeColor = Color.Firebrick;
-                    lblForgotStatus.Text = "New password must be at least 6 characters.";
-                    return;
-                }
-                if (pass != confirm)
-                {
-                    lblForgotStatus.ForeColor = Color.Firebrick;
-                    lblForgotStatus.Text = "The two passwords do not match.";
-                    return;
-                }
-
-                btnResetPassword.Enabled = false;
-                lblForgotStatus.ForeColor = Color.DarkSlateBlue;
-                lblForgotStatus.Text = "Connecting to Supabase Cloud and resetting password...";
-
-                var connStr = CloudDbConfig.GetConnectionString();
-                if (string.IsNullOrWhiteSpace(connStr))
-                {
-                    lblForgotStatus.ForeColor = Color.Firebrick;
-                    lblForgotStatus.Text = "Cloud database connection is not configured.";
-                    btnResetPassword.Enabled = true;
-                    return;
-                }
-
-                var (ok, msg) = await OnlineDatabaseService.CloudResetPasswordAsync(connStr, email, pass);
-                btnResetPassword.Enabled = true;
-
-                if (ok)
-                {
-                    lblForgotStatus.ForeColor = Color.SeaGreen;
-                    lblForgotStatus.Text = "Password reset successfully! You can now sign in with your new password.";
-                    MessageBox.Show("Password reset successfully! Please sign in with your new password.", "Password Reset Complete", MessageBoxButtons.OK, MessageBoxIcon.Information);
-                    tabs.SelectedTab = tabSignIn;
-                    txtSignInEmail.Text = email;
-                    txtSignInPassword.Text = pass;
-                }
-                else
-                {
-                    lblForgotStatus.ForeColor = Color.Firebrick;
-                    lblForgotStatus.Text = msg;
-                }
-            };
-
-            host.Controls.Add(FieldLabel("Registered Account Email"));
-            host.Controls.Add(txtForgotEmail);
-            host.Controls.Add(FieldLabel("New Password (min 6 characters)"));
-            host.Controls.Add(txtForgotNewPassword);
-            host.Controls.Add(FieldLabel("Confirm New Password"));
-            host.Controls.Add(txtForgotConfirm);
-            host.Controls.Add(btnResetPassword);
-            host.Controls.Add(lblForgotStatus);
-            tabForgot.Controls.Add(host);
+                btnNavCreate.BackColor = Color.FromArgb(37, 99, 235);
+                btnNavCreate.ForeColor = Color.White;
+                btnNavSignIn.BackColor = Color.FromArgb(241, 245, 249);
+                btnNavSignIn.ForeColor = Color.FromArgb(71, 85, 105);
+                AcceptButton = btnCreate;
+                lblHeaderSub.Text = "Create your account to start billing";
+            }
+            else if (card == cardForgot)
+            {
+                AcceptButton = btnForgotReset;
+                lblHeaderSub.Text = "Reset your cloud account password";
+            }
         }
 
-        private static Label FieldLabel(string text) => new()
+        private static Label Label(string text) => new()
         {
             Text = text,
+            Font = new Font("Segoe UI", 9F, FontStyle.Bold),
+            ForeColor = Color.FromArgb(51, 65, 85),
             AutoSize = true,
-            Location = new Point(16, 0)
+            Margin = new Padding(0, 8, 0, 4)
         };
 
-        private void BuildSignInTab()
+        private static void StyleInput(TextBox txt)
         {
-            tabSignIn.Padding = new Padding(14);
-            var host = new TableLayoutPanel
+            txt.Width = 390;
+            txt.Font = new Font("Segoe UI", 10F);
+        }
+
+        private void BuildSignInCard()
+        {
+            cardSignIn.Dock = DockStyle.Fill;
+            var layout = new FlowLayoutPanel
             {
                 Dock = DockStyle.Fill,
-                ColumnCount = 1,
-                RowCount = 7,
-                AutoScroll = true
+                FlowDirection = FlowDirection.TopDown,
+                AutoScroll = true,
+                WrapContents = false
             };
-            for (int i = 0; i < 7; i++) host.RowStyles.Add(new RowStyle(SizeType.AutoSize));
 
-            txtSignInEmail.Width = 470;
-            txtSignInPassword.Width = 470;
+            StyleInput(txtSignInEmail);
+            StyleInput(txtSignInPassword);
             txtSignInPassword.UseSystemPasswordChar = true;
 
-            lblSignInError.ForeColor = Color.Firebrick;
-            lblSignInError.AutoSize = true;
+            lnkForgotPass.Text = "Forgot password?";
+            lnkForgotPass.AutoSize = true;
+            lnkForgotPass.LinkColor = Color.FromArgb(37, 99, 235);
+            lnkForgotPass.Margin = new Padding(0, 4, 0, 12);
+            lnkForgotPass.Click += (s, e) => ShowCard(cardForgot);
 
             btnSignIn.Text = "Sign In";
-            btnSignIn.Width = 120;
-            btnSignIn.Height = 32;
+            btnSignIn.Size = new Size(390, 38);
+            btnSignIn.BackColor = Color.FromArgb(37, 99, 235);
+            btnSignIn.ForeColor = Color.White;
+            btnSignIn.FlatStyle = FlatStyle.Flat;
+            btnSignIn.FlatAppearance.BorderSize = 0;
+            btnSignIn.Font = new Font("Segoe UI", 10F, FontStyle.Bold);
+            btnSignIn.Margin = new Padding(0, 8, 0, 8);
             btnSignIn.Click += BtnSignIn_Click;
 
-            var btnCloudRestore = new Button
+            btnCloudRestore.Text = "⬇ Restore Account Data (New Device)";
+            btnCloudRestore.Size = new Size(390, 34);
+            btnCloudRestore.BackColor = Color.FromArgb(241, 245, 249);
+            btnCloudRestore.ForeColor = Color.FromArgb(30, 41, 59);
+            btnCloudRestore.FlatStyle = FlatStyle.Flat;
+            btnCloudRestore.FlatAppearance.BorderColor = Color.FromArgb(203, 213, 225);
+            btnCloudRestore.Font = new Font("Segoe UI", 9F, FontStyle.Bold);
+            btnCloudRestore.Margin = new Padding(0, 0, 0, 8);
+            btnCloudRestore.Click += BtnCloudRestore_Click;
+
+            lblSignInStatus.AutoSize = true;
+            lblSignInStatus.MaximumSize = new Size(390, 0);
+            lblSignInStatus.ForeColor = Color.Firebrick;
+
+            layout.Controls.Add(Label("Email Address"));
+            layout.Controls.Add(txtSignInEmail);
+            layout.Controls.Add(Label("Password"));
+            layout.Controls.Add(txtSignInPassword);
+            layout.Controls.Add(lnkForgotPass);
+            layout.Controls.Add(btnSignIn);
+            layout.Controls.Add(btnCloudRestore);
+            layout.Controls.Add(lblSignInStatus);
+
+            cardSignIn.Controls.Add(layout);
+        }
+
+        private void BuildCreateCard()
+        {
+            cardCreate.Dock = DockStyle.Fill;
+            var layout = new FlowLayoutPanel
             {
-                Text = "⬇ Restore Cloud Data for this Account (New Device)",
-                Width = 320,
-                Height = 32,
-                Margin = new Padding(0, 10, 0, 0),
-                FlatStyle = FlatStyle.Flat
+                Dock = DockStyle.Fill,
+                FlowDirection = FlowDirection.TopDown,
+                AutoScroll = true,
+                WrapContents = false
             };
-            btnCloudRestore.Click += async (s, e) =>
+
+            StyleInput(txtCreateEmail);
+            StyleInput(txtCreateFullName);
+            StyleInput(txtCreatePassword);
+            StyleInput(txtCreateConfirm);
+            txtCreatePassword.UseSystemPasswordChar = true;
+            txtCreateConfirm.UseSystemPasswordChar = true;
+
+            btnCreate.Text = "Create Account & Continue";
+            btnCreate.Size = new Size(390, 38);
+            btnCreate.BackColor = Color.FromArgb(37, 99, 235);
+            btnCreate.ForeColor = Color.White;
+            btnCreate.FlatStyle = FlatStyle.Flat;
+            btnCreate.FlatAppearance.BorderSize = 0;
+            btnCreate.Font = new Font("Segoe UI", 10F, FontStyle.Bold);
+            btnCreate.Margin = new Padding(0, 12, 0, 8);
+            btnCreate.Click += BtnCreate_Click;
+
+            lblCreateStatus.AutoSize = true;
+            lblCreateStatus.MaximumSize = new Size(390, 0);
+            lblCreateStatus.ForeColor = Color.Firebrick;
+
+            layout.Controls.Add(Label("Email Address (Used to sign in)"));
+            layout.Controls.Add(txtCreateEmail);
+            layout.Controls.Add(Label("Your Full Name"));
+            layout.Controls.Add(txtCreateFullName);
+            layout.Controls.Add(Label("Password (min 6 characters)"));
+            layout.Controls.Add(txtCreatePassword);
+            layout.Controls.Add(Label("Confirm Password"));
+            layout.Controls.Add(txtCreateConfirm);
+            layout.Controls.Add(btnCreate);
+            layout.Controls.Add(lblCreateStatus);
+
+            cardCreate.Controls.Add(layout);
+        }
+
+        private void BuildForgotCard()
+        {
+            cardForgot.Dock = DockStyle.Fill;
+            var layout = new FlowLayoutPanel
             {
-                lblSignInError.Text = string.Empty;
-                var (ok, error) = AuthService.SignIn(txtSignInEmail.Text, txtSignInPassword.Text);
+                Dock = DockStyle.Fill,
+                FlowDirection = FlowDirection.TopDown,
+                AutoScroll = true,
+                WrapContents = false
+            };
+
+            StyleInput(txtForgotEmail);
+            StyleInput(txtForgotNewPassword);
+            StyleInput(txtForgotConfirm);
+            txtForgotNewPassword.UseSystemPasswordChar = true;
+            txtForgotConfirm.UseSystemPasswordChar = true;
+
+            btnForgotReset.Text = "🔐 Reset Password (Supabase Cloud)";
+            btnForgotReset.Size = new Size(390, 38);
+            btnForgotReset.BackColor = Color.FromArgb(37, 99, 235);
+            btnForgotReset.ForeColor = Color.White;
+            btnForgotReset.FlatStyle = FlatStyle.Flat;
+            btnForgotReset.FlatAppearance.BorderSize = 0;
+            btnForgotReset.Font = new Font("Segoe UI", 10F, FontStyle.Bold);
+            btnForgotReset.Margin = new Padding(0, 12, 0, 8);
+            btnForgotReset.Click += BtnForgotReset_Click;
+
+            lnkBackToSignIn.Text = "← Back to Sign In";
+            lnkBackToSignIn.AutoSize = true;
+            lnkBackToSignIn.LinkColor = Color.FromArgb(37, 99, 235);
+            lnkBackToSignIn.Margin = new Padding(0, 4, 0, 12);
+            lnkBackToSignIn.Click += (s, e) => ShowCard(cardSignIn);
+
+            lblForgotStatus.AutoSize = true;
+            lblForgotStatus.MaximumSize = new Size(390, 0);
+            lblForgotStatus.ForeColor = Color.Firebrick;
+
+            layout.Controls.Add(Label("Registered Account Email"));
+            layout.Controls.Add(txtForgotEmail);
+            layout.Controls.Add(Label("New Password (min 6 characters)"));
+            layout.Controls.Add(txtForgotNewPassword);
+            layout.Controls.Add(Label("Confirm New Password"));
+            layout.Controls.Add(txtForgotConfirm);
+            layout.Controls.Add(btnForgotReset);
+            layout.Controls.Add(lnkBackToSignIn);
+            layout.Controls.Add(lblForgotStatus);
+
+            cardForgot.Controls.Add(layout);
+        }
+
+        // =========================================================================
+        // ASYNCHRONOUS EVENT HANDLERS (NO UI DEADLOCKS)
+        // =========================================================================
+
+        private async void BtnSignIn_Click(object? sender, EventArgs e)
+        {
+            lblSignInStatus.ForeColor = Color.Firebrick;
+            lblSignInStatus.Text = string.Empty;
+
+            var email = txtSignInEmail.Text.Trim();
+            var pass = txtSignInPassword.Text;
+
+            if (string.IsNullOrWhiteSpace(email) || string.IsNullOrWhiteSpace(pass))
+            {
+                lblSignInStatus.Text = "Please enter your email and password.";
+                return;
+            }
+
+            btnSignIn.Enabled = false;
+            btnSignIn.Text = "Signing in...";
+            lblSignInStatus.ForeColor = Color.DarkSlateBlue;
+            lblSignInStatus.Text = "Authenticating account...";
+
+            try
+            {
+                var (ok, error) = await AuthService.SignInAsync(email, pass);
                 if (!ok)
                 {
-                    lblSignInError.Text = error;
+                    lblSignInStatus.ForeColor = Color.Firebrick;
+                    lblSignInStatus.Text = error;
                     txtSignInPassword.SelectAll();
                     txtSignInPassword.Focus();
                     return;
                 }
 
-                btnCloudRestore.Enabled = false;
-                lblSignInError.ForeColor = Color.DarkSlateBlue;
-                lblSignInError.Text = "Connecting to cloud backend and pulling account data...";
+                DialogResult = DialogResult.OK;
+                Close();
+            }
+            finally
+            {
+                btnSignIn.Enabled = true;
+                btnSignIn.Text = "Sign In";
+            }
+        }
 
+        private async void BtnCreate_Click(object? sender, EventArgs e)
+        {
+            lblCreateStatus.ForeColor = Color.Firebrick;
+            lblCreateStatus.Text = string.Empty;
+
+            var email = txtCreateEmail.Text.Trim();
+            var name = txtCreateFullName.Text.Trim();
+            var pass = txtCreatePassword.Text;
+            var confirm = txtCreateConfirm.Text;
+
+            if (string.IsNullOrWhiteSpace(email) || !email.Contains('@'))
+            {
+                lblCreateStatus.Text = "Please enter a valid email address.";
+                return;
+            }
+            if (string.IsNullOrWhiteSpace(name))
+            {
+                lblCreateStatus.Text = "Please enter your full name.";
+                return;
+            }
+            if (string.IsNullOrWhiteSpace(pass) || pass.Length < 6)
+            {
+                lblCreateStatus.Text = "Password must be at least 6 characters.";
+                return;
+            }
+            if (pass != confirm)
+            {
+                lblCreateStatus.Text = "The two passwords do not match.";
+                return;
+            }
+
+            btnCreate.Enabled = false;
+            btnCreate.Text = "Creating account...";
+            lblCreateStatus.ForeColor = Color.DarkSlateBlue;
+            lblCreateStatus.Text = "Registering user account...";
+
+            try
+            {
+                var (ok, error) = await AuthService.RegisterAsync(email, pass, name);
+
+                if (!ok)
+                {
+                    lblCreateStatus.ForeColor = Color.Firebrick;
+                    lblCreateStatus.Text = error;
+                    return;
+                }
+
+                DialogResult = DialogResult.OK;
+                Close();
+            }
+            finally
+            {
+                btnCreate.Enabled = true;
+                btnCreate.Text = "Create Account & Continue";
+            }
+        }
+
+        private async void BtnCloudRestore_Click(object? sender, EventArgs e)
+        {
+            lblSignInStatus.ForeColor = Color.Firebrick;
+            lblSignInStatus.Text = string.Empty;
+
+            var email = txtSignInEmail.Text.Trim();
+            var pass = txtSignInPassword.Text;
+
+            if (string.IsNullOrWhiteSpace(email) || string.IsNullOrWhiteSpace(pass))
+            {
+                lblSignInStatus.Text = "Enter your account email and password to restore data.";
+                return;
+            }
+
+            btnCloudRestore.Enabled = false;
+            lblSignInStatus.ForeColor = Color.DarkSlateBlue;
+            lblSignInStatus.Text = "Authenticating against cloud database...";
+
+            try
+            {
+                var (authOk, authError) = await AuthService.SignInAsync(email, pass);
+                if (!authOk)
+                {
+                    lblSignInStatus.ForeColor = Color.Firebrick;
+                    lblSignInStatus.Text = authError;
+                    return;
+                }
+
+                lblSignInStatus.Text = "Downloading your business data from Supabase Cloud...";
                 var connStr = CloudDbConfig.GetConnectionString();
                 if (string.IsNullOrWhiteSpace(connStr))
                     connStr = AppSettingsService.SyncConnectionString;
 
                 if (string.IsNullOrWhiteSpace(connStr))
                 {
-                    lblSignInError.ForeColor = Color.Firebrick;
-                    lblSignInError.Text = "Cloud backend is not configured by admin yet.";
-                    btnCloudRestore.Enabled = true;
+                    lblSignInStatus.ForeColor = Color.Firebrick;
+                    lblSignInStatus.Text = "Cloud backend connection is not configured.";
                     return;
                 }
 
                 var (pullOk, pullMsg) = await OnlineDatabaseService.PullFromCloudAsync(connStr, AuthService.CurrentUser?.Id);
-                btnCloudRestore.Enabled = true;
 
                 if (pullOk)
                 {
@@ -272,145 +495,76 @@ namespace BillingSuite.App.Forms
                 }
                 else
                 {
-                    lblSignInError.ForeColor = Color.Firebrick;
-                    lblSignInError.Text = pullMsg;
+                    lblSignInStatus.ForeColor = Color.Firebrick;
+                    lblSignInStatus.Text = pullMsg;
                 }
-            };
-
-            var flowAction = new FlowLayoutPanel { AutoSize = true, FlowDirection = FlowDirection.LeftToRight };
-            flowAction.Controls.Add(btnSignIn);
-            flowAction.Controls.Add(btnCloudRestore);
-
-            host.Controls.Add(FieldLabel("Email"));
-            host.Controls.Add(txtSignInEmail);
-            host.Controls.Add(FieldLabel("Password"));
-            host.Controls.Add(txtSignInPassword);
-            host.Controls.Add(flowAction);
-            host.Controls.Add(lblSignInError);
-            tabSignIn.Controls.Add(host);
+            }
+            finally
+            {
+                btnCloudRestore.Enabled = true;
+            }
         }
 
-        private void BuildCreateTab()
+        private async void BtnForgotReset_Click(object? sender, EventArgs e)
         {
-            tabCreate.Padding = new Padding(14);
-            var scroll = new Panel { Dock = DockStyle.Fill, AutoScroll = true };
-            var host = new TableLayoutPanel
+            lblForgotStatus.ForeColor = Color.Firebrick;
+            lblForgotStatus.Text = string.Empty;
+
+            var email = txtForgotEmail.Text.Trim();
+            var pass = txtForgotNewPassword.Text;
+            var confirm = txtForgotConfirm.Text;
+
+            if (string.IsNullOrWhiteSpace(email) || !email.Contains('@'))
             {
-                Dock = DockStyle.Top,
-                ColumnCount = 1,
-                AutoSize = true,
-                AutoSizeMode = AutoSizeMode.GrowAndShrink
-            };
-            for (int i = 0; i < 24; i++) host.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-
-            void Wide(TextBox t) { t.Width = 470; }
-
-            Wide(txtEmail); Wide(txtPassword); Wide(txtConfirm);
-            Wide(txtFullName); Wide(txtPhone); Wide(txtCompany);
-            Wide(txtCompanyAddress); Wide(txtCompanyPhone); Wide(txtCompanyEmail); Wide(txtCompanyTax);
-            txtPassword.UseSystemPasswordChar = true;
-            txtConfirm.UseSystemPasswordChar = true;
-            txtCompanyAddress.Multiline = true;
-            txtCompanyAddress.Height = 54;
-
-            lblCreateError.ForeColor = Color.Firebrick;
-            lblCreateError.AutoSize = true;
-
-            btnCreate.Text = _firstRun ? "Create Account and Continue" : "Create Account";
-            btnCreate.Width = 220;
-            btnCreate.Height = 32;
-            btnCreate.Click += BtnCreate_Click;
-
-            host.Controls.Add(FieldLabel("Email (used to sign in)"));
-            host.Controls.Add(txtEmail);
-            host.Controls.Add(FieldLabel("Password (min 6 characters)"));
-            host.Controls.Add(txtPassword);
-            host.Controls.Add(FieldLabel("Confirm password"));
-            host.Controls.Add(txtConfirm);
-            host.Controls.Add(FieldLabel("Your full name"));
-            host.Controls.Add(txtFullName);
-            host.Controls.Add(FieldLabel("Your phone (optional)"));
-            host.Controls.Add(txtPhone);
-            host.Controls.Add(FieldLabel("Company name"));
-            host.Controls.Add(txtCompany);
-            host.Controls.Add(FieldLabel("Company address"));
-            host.Controls.Add(txtCompanyAddress);
-            host.Controls.Add(FieldLabel("Company phone"));
-            host.Controls.Add(txtCompanyPhone);
-            host.Controls.Add(FieldLabel("Company email"));
-            host.Controls.Add(txtCompanyEmail);
-            host.Controls.Add(FieldLabel("Company tax / GST number"));
-            host.Controls.Add(txtCompanyTax);
-            host.Controls.Add(btnCreate);
-            host.Controls.Add(lblCreateError);
-
-            scroll.Controls.Add(host);
-            tabCreate.Controls.Add(scroll);
-        }
-
-        private void BtnSignIn_Click(object? sender, EventArgs e)
-        {
-            lblSignInError.Text = string.Empty;
-            var (ok, error) = AuthService.SignIn(txtSignInEmail.Text, txtSignInPassword.Text);
-            if (!ok)
-            {
-                lblSignInError.Text = error;
-                txtSignInPassword.SelectAll();
-                txtSignInPassword.Focus();
+                lblForgotStatus.Text = "Please enter a valid registered email address.";
                 return;
             }
-            DialogResult = DialogResult.OK;
-            Close();
-        }
-
-        private void BtnCreate_Click(object? sender, EventArgs e)
-        {
-            lblCreateError.Text = string.Empty;
-
-            if (txtPassword.Text != txtConfirm.Text)
+            if (string.IsNullOrWhiteSpace(pass) || pass.Length < 6)
             {
-                lblCreateError.Text = "The two passwords do not match.";
+                lblForgotStatus.Text = "New password must be at least 6 characters.";
+                return;
+            }
+            if (pass != confirm)
+            {
+                lblForgotStatus.Text = "The two passwords do not match.";
                 return;
             }
 
-            var (ok, error) = AuthService.Register(
-                txtEmail.Text, txtPassword.Text, txtFullName.Text, txtPhone.Text,
-                txtCompany.Text, txtCompanyAddress.Text, txtCompanyPhone.Text,
-                txtCompanyEmail.Text, txtCompanyTax.Text);
+            btnForgotReset.Enabled = false;
+            btnForgotReset.Text = "Resetting password...";
+            lblForgotStatus.ForeColor = Color.DarkSlateBlue;
+            lblForgotStatus.Text = "Connecting to Supabase Cloud...";
 
-            if (!ok)
+            try
             {
-                lblCreateError.Text = error;
-                return;
+                var connStr = CloudDbConfig.GetConnectionString();
+                if (string.IsNullOrWhiteSpace(connStr))
+                {
+                    lblForgotStatus.ForeColor = Color.Firebrick;
+                    lblForgotStatus.Text = "Cloud database connection is not configured.";
+                    return;
+                }
+
+                var (ok, msg) = await OnlineDatabaseService.CloudResetPasswordAsync(connStr, email, pass);
+
+                if (ok)
+                {
+                    MessageBox.Show("Password reset successfully! Please sign in with your new password.", "Password Reset Complete", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    ShowCard(cardSignIn);
+                    txtSignInEmail.Text = email;
+                    txtSignInPassword.Text = pass;
+                }
+                else
+                {
+                    lblForgotStatus.ForeColor = Color.Firebrick;
+                    lblForgotStatus.Text = msg;
+                }
             }
-
-            // Seed the company settings from the profile just captured, so invoices stop
-            // reading "Your Company" immediately rather than waiting for a Settings visit.
-            ApplyProfileToSettings();
-
-            DialogResult = DialogResult.OK;
-            Close();
-        }
-
-        private static void ApplyProfileToSettings()
-        {
-            var u = AuthService.CurrentUser;
-            if (u == null) return;
-
-            var pairs = new System.Collections.Generic.List<System.Collections.Generic.KeyValuePair<string, string?>>();
-            void Add(string key, string? value)
+            finally
             {
-                if (!string.IsNullOrWhiteSpace(value)) pairs.Add(new(key, value.Trim()));
+                btnForgotReset.Enabled = true;
+                btnForgotReset.Text = "🔐 Reset Password (Supabase Cloud)";
             }
-
-            Add(Models.AppSettingKeys.CompanyName, u.CompanyName);
-            Add(Models.AppSettingKeys.CompanyAddress1, u.CompanyAddress);
-            Add(Models.AppSettingKeys.CompanyPhone, u.CompanyPhone);
-            Add(Models.AppSettingKeys.CompanyEmail, u.CompanyEmail);
-            Add(Models.AppSettingKeys.CompanyTaxNumber, u.CompanyTaxNumber);
-
-            if (pairs.Count > 0) AppSettingsService.SetMany(pairs);
-            AppSettingsService.Invalidate();
         }
     }
 }

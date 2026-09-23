@@ -78,11 +78,10 @@ static class Program
             }
             catch { }
 
-            // Gate the app behind a local account. First run (no account on this
-            // device) opens on the create-account tab and captures the company profile.
+            // Gate the app behind user authentication
             if (args.Length == 0 || args[0] != "--no-auth")
             {
-                // Attempt auto-login using saved session or single device account
+                // Attempt auto-login using saved session
                 bool autoLoggedIn = Services.AuthService.TryAutoLogin();
 
                 if (!autoLoggedIn)
@@ -91,8 +90,19 @@ static class Program
                     using var login = new Forms.LoginForm(firstRun);
                     if (login.ShowDialog() != DialogResult.OK)
                     {
-                        // User closed the sign-in window: do not open the app.
+                        // User closed sign in dialog: exit app
                         return;
+                    }
+                }
+
+                // Check if business profile needs initial setup (Full-Window Onboarding)
+                var currentComp = Services.AppSettingsService.CompanyName;
+                if (string.IsNullOrWhiteSpace(currentComp) || currentComp == "Your Company")
+                {
+                    using var setup = new Forms.OnboardingSetupForm();
+                    if (setup.ShowDialog() != DialogResult.OK)
+                    {
+                        // User cancelled business profile setup
                     }
                 }
             }
