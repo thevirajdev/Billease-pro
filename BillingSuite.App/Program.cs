@@ -78,12 +78,18 @@ static class Program
             // device) opens on the create-account tab and captures the company profile.
             if (args.Length == 0 || args[0] != "--no-auth")
             {
-                var firstRun = !Services.AuthService.AnyUserExists();
-                using var login = new Forms.LoginForm(firstRun);
-                if (login.ShowDialog() != DialogResult.OK)
+                // Attempt auto-login using saved session or single device account
+                bool autoLoggedIn = Services.AuthService.TryAutoLogin();
+
+                if (!autoLoggedIn)
                 {
-                    // User closed the sign-in window: do not open the app.
-                    return;
+                    var firstRun = !Services.AuthService.AnyUserExists();
+                    using var login = new Forms.LoginForm(firstRun);
+                    if (login.ShowDialog() != DialogResult.OK)
+                    {
+                        // User closed the sign-in window: do not open the app.
+                        return;
+                    }
                 }
             }
 

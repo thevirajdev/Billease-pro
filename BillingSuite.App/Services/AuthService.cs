@@ -25,7 +25,56 @@ namespace BillingSuite.App.Services
         public static AppUser? CurrentUser { get; private set; }
         public static bool IsSignedIn => CurrentUser != null;
 
-        public static void SignOut() => CurrentUser = null;
+        public static void SignOut()
+        {
+            CurrentUser = null;
+            try
+            {
+                AppSettingsService.Set("ActiveSessionUserId", "0");
+            }
+            catch { }
+        }
+
+        /// <summary>
+        /// Attempts to auto-login the last signed-in user or single user account on startup.
+        /// Returns true if user session is active.
+        /// </summary>
+        public static bool TryAutoLogin()
+        {
+            try
+            {
+                using var db = new AppDbContext();
+                var users = db.Users.Where(u => !u.DisabledAt.HasValue).ToList();
+                if (users.Count == 0) return false;
+
+                int activeId = AppSettingsService.GetInt("ActiveSessionUserId", 0);
+                AppUser? targetUser = null;
+
+                if (activeId > 0)
+                {
+                    targetUser = users.FirstOrDefault(u => u.Id == activeId);
+                }
+
+                // Single account on device -> auto login
+                if (targetUser == null && users.Count == 1)
+                {
+                    targetUser = users[0];
+                }
+
+                if (targetUser != null)
+                {
+                    CurrentUser = targetUser;
+                    AppSettingsService.Set("ActiveSessionUserId", targetUser.Id.ToString());
+                    DatabaseUtils.ClaimLegacyUnownedData(targetUser.Id);
+                    return true;
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"TryAutoLogin warning: {ex.Message}");
+            }
+            return false;
+        }
 
         /// <summary>True when at least one account exists, i.e. setup has been completed.</summary>
         public static bool AnyUserExists()
@@ -85,6 +134,7 @@ namespace BillingSuite.App.Services
                 db.SaveChanges();
 
                 CurrentUser = user;
+                AppSettingsService.Set("ActiveSessionUserId", user.Id.ToString());
                 DatabaseUtils.ClaimLegacyUnownedData(user.Id);
                 return (true, string.Empty);
             }
@@ -116,6 +166,7 @@ namespace BillingSuite.App.Services
                 db.SaveChanges();
 
                 CurrentUser = user;
+                AppSettingsService.Set("ActiveSessionUserId", user.Id.ToString());
                 DatabaseUtils.ClaimLegacyUnownedData(user.Id);
                 return (true, string.Empty);
             }

@@ -16,7 +16,7 @@ AppUpdatesURL={#MyAppURL}
 DefaultDirName={autopf}\{#MyAppName}
 DefaultGroupName={#MyAppName}
 AllowNoIcons=yes
-OutputDir=BillingSuite.App\bin\Release\net8.0-windows\win-x64\publish
+OutputDir=installer_output
 OutputBaseFilename=BilleasePro_Setup
 Compression=lzma2/fast
 SolidCompression=yes
@@ -32,11 +32,7 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"
 
 [Files]
-Source: "BillingSuite.App\bin\Release\net8.0-windows\win-x64\publish\BillingSuite.App.exe"; DestDir: "{app}"; Flags: ignoreversion
-Source: "BillingSuite.App\bin\Release\net8.0-windows\win-x64\publish\splash.mp4"; DestDir: "{app}"; Flags: ignoreversion
-Source: "BillingSuite.App\bin\Release\net8.0-windows\win-x64\publish\billease.ico"; DestDir: "{app}"; Flags: ignoreversion
-Source: "BillingSuite.App\bin\Release\net8.0-windows\win-x64\publish\ReportsWeb\*"; DestDir: "{app}\ReportsWeb"; Flags: ignoreversion recursesubdirs createallsubdirs
-Source: "BillingSuite.App\bin\Release\net8.0-windows\win-x64\publish\LatoFont\*"; DestDir: "{app}\LatoFont"; Flags: ignoreversion recursesubdirs createallsubdirs skipifsourcedoesntexist
+Source: "BillingSuite.App\bin\Release\net8.0-windows\win-x64\publish\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs; Excludes: "BilleasePro_Setup.exe,*.bak,*.db"
 
 [Icons]
 Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"
