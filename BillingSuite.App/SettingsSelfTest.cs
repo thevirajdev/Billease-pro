@@ -25,8 +25,8 @@ namespace BillingSuite.App
             AppSettingsService.SetMany(new[]
             {
                 new System.Collections.Generic.KeyValuePair<string, string?>(AppSettingKeys.CompanyName, "Sunrise Medical Store"),
-                new System.Collections.Generic.KeyValuePair<string, string?>(AppSettingKeys.CompanyAddress1, "44 Mall Road"),
-                new System.Collections.Generic.KeyValuePair<string, string?>(AppSettingKeys.CompanyCity, "Lahore"),
+                new System.Collections.Generic.KeyValuePair<string, string?>(AppSettingKeys.CompanyAddress1, "Connaught Place"),
+                new System.Collections.Generic.KeyValuePair<string, string?>(AppSettingKeys.CompanyCity, "New Delhi"),
                 new System.Collections.Generic.KeyValuePair<string, string?>(AppSettingKeys.InvoiceMarginMm, "14"),
                 new System.Collections.Generic.KeyValuePair<string, string?>(AppSettingKeys.InvoicePageSize, "LETTER"),
             });
@@ -51,7 +51,7 @@ namespace BillingSuite.App
             check("Invoice HTML no longer says 'Your Company'",
                 !html.Contains("Your Company"), null);
             check("Invoice HTML includes the company address block",
-                html.Contains("44 Mall Road") && html.Contains("Lahore"), null);
+                html.Contains("Connaught Place") && html.Contains("New Delhi"), null);
 
             // Regression guard: the @page rule must be interpolated, not emitted literally.
             check("Invoice HTML @page is interpolated, not literal",
@@ -255,12 +255,12 @@ namespace BillingSuite.App
 
             using (var db = new Data.AppDbContext())
             {
-                // Signed-out sessions (repairs, background jobs) see everything.
+                // Signed-out sessions with IgnoreQueryFilters() (repairs, background jobs) see everything.
                 check("Isolation: signed-out sees all rows",
-                    db.Customers.Any(c => c.Name == "OwnerA Test") && db.Customers.Any(c => c.Name == "OwnerB Test"), null);
+                    db.Customers.IgnoreQueryFilters().Any(c => c.Name == "OwnerA Test") && db.Customers.IgnoreQueryFilters().Any(c => c.Name == "OwnerB Test"), null);
 
-                foreach (var c in db.Customers.Where(c => c.Name == "OwnerA Test" || c.Name == "OwnerB Test")) db.Customers.Remove(c);
-                foreach (var u in db.Users.Where(u => u.Email == aEmail || u.Email == bEmail)) db.Users.Remove(u);
+                foreach (var c in db.Customers.IgnoreQueryFilters().Where(c => c.Name == "OwnerA Test" || c.Name == "OwnerB Test")) db.Customers.Remove(c);
+                foreach (var u in db.Users.IgnoreQueryFilters().Where(u => u.Email == aEmail || u.Email == bEmail)) db.Users.Remove(u);
                 db.SaveChanges();
             }
             check("Isolation: test rows and accounts removed",
@@ -332,15 +332,16 @@ namespace BillingSuite.App
                 // The address block is what the invoice renderers actually consume.
                 AppSettingsService.SetMany(new[]
                 {
-                    new System.Collections.Generic.KeyValuePair<string, string?>(AppSettingKeys.CompanyAddress1, "12 Market Road"),
-                    new System.Collections.Generic.KeyValuePair<string, string?>(AppSettingKeys.CompanyCity, "Lahore"),
-                    new System.Collections.Generic.KeyValuePair<string, string?>(AppSettingKeys.CompanyCountry, "Pakistan"),
+                    new System.Collections.Generic.KeyValuePair<string, string?>(AppSettingKeys.CompanyAddress1, "Connaught Place"),
+                    new System.Collections.Generic.KeyValuePair<string, string?>(AppSettingKeys.CompanyCity, "New Delhi"),
+                    new System.Collections.Generic.KeyValuePair<string, string?>(AppSettingKeys.CompanyCountry, "India"),
                 });
                 AppSettingsService.Invalidate();
                 var block = AppSettingsService.CompanyAddressBlock();
                 Check("CompanyAddressBlock combines fields",
-                    block.Contains("12 Market Road") && block.Contains("Lahore") && block.Contains("Pakistan"),
+                    block.Contains("Connaught Place") && block.Contains("New Delhi") && block.Contains("India"),
                     block.Replace("\n", " / ").Replace("\r", ""));
+                AppSettingsService.ResetKeys(new[] { AppSettingKeys.CompanyAddress1, AppSettingKeys.CompanyCity, AppSettingKeys.CompanyCountry });
 
                 // Reset must delete rows so re-seed restores factory values.
                 AppSettingsService.ResetKeys(new[] { AppSettingKeys.CompanyName });

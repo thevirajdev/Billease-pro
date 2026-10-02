@@ -2,6 +2,8 @@
 [Bb]in/
 [Oo]bj/
 publish/
+publish_output/
+installer_output/
 *.exe
 *.dll
 *.pdb

@@ -236,71 +236,175 @@
             // Numerical Updates
             for (const key in data.stats) {
                 const el = document.getElementById('stat-' + key);
-                if (el) el.innerText = parseFloat(data.stats[key]).toLocaleString(undefined, { minimumFractionDigits: 2 });
+                if (el) el.innerText = parseFloat(data.stats[key]).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
             }
             for (const key in data.financials) {
                 const el = document.getElementById('val-' + key);
-                if (el) el.innerText = parseFloat(data.financials[key]).toLocaleString(undefined, { minimumFractionDigits: 2 });
+                if (el) el.innerText = parseFloat(data.financials[key]).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
             }
 
             // Chart Update
             const ctx = document.getElementById('mainChart').getContext('2d');
-            if (mainChart) mainChart.destroy();
+            let chartSuccess = false;
 
-            mainChart = new Chart(ctx, {
-                type: 'line',
-                data: {
-                    labels: data.chart.labels,
-                    datasets: [
-                        {
-                            label: 'Sales',
-                            data: data.chart.sales,
-                            borderColor: '#00b894',
-                            backgroundColor: 'rgba(0, 184, 148, 0.1)',
-                            fill: true,
-                            tension: 0.4
+            if (typeof Chart !== 'undefined') {
+                try {
+                    if (mainChart) mainChart.destroy();
+                    mainChart = new Chart(ctx, {
+                        type: 'line',
+                        data: {
+                            labels: data.chart.labels,
+                            datasets: [
+                                {
+                                    label: 'Sales',
+                                    data: data.chart.sales,
+                                    borderColor: '#00b894',
+                                    backgroundColor: 'rgba(0, 184, 148, 0.1)',
+                                    fill: true,
+                                    tension: 0.4
+                                },
+                                {
+                                    label: 'Purchase',
+                                    data: data.chart.purchases,
+                                    borderColor: '#0984e3',
+                                    backgroundColor: 'rgba(9, 132, 227, 0.1)',
+                                    fill: true,
+                                    tension: 0.4
+                                }
+                            ]
                         },
-                        {
-                            label: 'Purchase',
-                            data: data.chart.purchases,
-                            borderColor: '#0984e3',
-                            backgroundColor: 'rgba(9, 132, 227, 0.1)',
-                            fill: true,
-                            tension: 0.4
+                        options: {
+                            responsive: true,
+                            maintainAspectRatio: false,
+                            plugins: {
+                                legend: { position: 'top', labels: { usePointStyle: true, font: { family: 'Inter', size: 12 } } }
+                            },
+                            scales: {
+                                y: { beginAtZero: true, grid: { display: false } },
+                                x: { grid: { display: false } }
+                            }
                         }
-                    ]
-                },
-                options: {
-                    responsive: true,
-                    maintainAspectRatio: false,
-                    plugins: {
-                        legend: { position: 'top', labels: { usePointStyle: true, font: { family: 'Inter', size: 12 } } }
-                    },
-                    scales: {
-                        y: { beginAtZero: true, grid: { display: false } },
-                        x: { grid: { display: false } }
-                    }
+                    });
+                    chartSuccess = true;
+                } catch(err) {
+                    console.error("Chart.js render error, switching to canvas fallback:", err);
                 }
+            }
+
+            if (!chartSuccess) {
+                drawCanvasFallbackChart(ctx, data.chart);
+            }
+        }
+
+        function drawCanvasFallbackChart(ctx, chartData) {
+            const canvas = ctx.canvas;
+            const container = canvas.parentElement;
+            const w = container ? container.clientWidth : 600;
+            const h = container ? container.clientHeight : 320;
+            canvas.width = w;
+            canvas.height = h;
+
+            ctx.clearRect(0, 0, w, h);
+
+            const labels = chartData.labels || [];
+            const sales = chartData.sales || [];
+            const purchases = chartData.purchases || [];
+
+            const padding = { top: 40, right: 30, bottom: 40, left: 60 };
+            const chartW = w - padding.left - padding.right;
+            const chartH = h - padding.top - padding.bottom;
+
+            const maxVal = Math.max(100, ...sales, ...purchases) * 1.15;
+
+            // Gridlines & Y-Axis Labels
+            ctx.strokeStyle = '#e2e8f0';
+            ctx.lineWidth = 1;
+            ctx.font = '11px Inter, sans-serif';
+            ctx.fillStyle = '#64748b';
+
+            const steps = 4;
+            for (let i = 0; i <= steps; i++) {
+                const yVal = (maxVal / steps) * i;
+                const yPos = padding.top + chartH - (chartH * (i / steps));
+                
+                ctx.beginPath();
+                ctx.moveTo(padding.left, yPos);
+                ctx.lineTo(w - padding.right, yPos);
+                ctx.stroke();
+
+                ctx.textAlign = 'right';
+                const labelText = yVal >= 1000 ? (yVal/1000).toFixed(1) + 'k' : yVal.toFixed(0);
+                ctx.fillText(labelText, padding.left - 8, yPos + 4);
+            }
+
+            if (labels.length === 0) return;
+
+            const stepX = chartW / Math.max(1, labels.length - 1);
+
+            // X-Axis Labels
+            ctx.textAlign = 'center';
+            labels.forEach((lbl, idx) => {
+                const xPos = padding.left + (idx * stepX);
+                ctx.fillText(lbl, xPos, h - padding.bottom + 20);
             });
+
+            // Series Helper
+            function drawSeries(dataArr, strokeColor) {
+                if (dataArr.length === 0) return;
+
+                ctx.beginPath();
+                dataArr.forEach((val, idx) => {
+                    const xPos = padding.left + (idx * stepX);
+                    const yPos = padding.top + chartH - (chartH * (val / maxVal));
+                    if (idx === 0) ctx.moveTo(xPos, yPos);
+                    else ctx.lineTo(xPos, yPos);
+                });
+
+                ctx.strokeStyle = strokeColor;
+                ctx.lineWidth = 3;
+                ctx.stroke();
+
+                dataArr.forEach((val, idx) => {
+                    const xPos = padding.left + (idx * stepX);
+                    const yPos = padding.top + chartH - (chartH * (val / maxVal));
+                    ctx.beginPath();
+                    ctx.arc(xPos, yPos, 4, 0, 2 * Math.PI);
+                    ctx.fillStyle = strokeColor;
+                    ctx.fill();
+                    ctx.fillStyle = '#ffffff';
+                    ctx.beginPath();
+                    ctx.arc(xPos, yPos, 2, 0, 2 * Math.PI);
+                    ctx.fill();
+                });
+            }
+
+            // Draw Sales (Green) & Purchase (Blue)
+            drawSeries(sales, '#00b894');
+            drawSeries(purchases, '#0984e3');
+
+            // Draw Legend
+            ctx.font = 'bold 12px Inter, sans-serif';
+            ctx.textAlign = 'left';
+
+            ctx.fillStyle = '#00b894';
+            ctx.fillRect(padding.left, 12, 14, 14);
+            ctx.fillStyle = '#2d3436';
+            ctx.fillText('Sales', padding.left + 20, 24);
+
+            ctx.fillStyle = '#0984e3';
+            ctx.fillRect(padding.left + 90, 12, 14, 14);
+            ctx.fillStyle = '#2d3436';
+            ctx.fillText('Purchase', padding.left + 110, 24);
         }
 
         function setPeriod(p, btn) {
-            // Updated active UI
             document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
             btn.classList.add('active');
 
-            // Notify C# to refresh with this period
             if (window.chrome && window.chrome.webview) {
                 window.chrome.webview.postMessage({ type: 'filter-chart', period: p });
             }
         }
-
-        // Test implementation (C# will call updateStats)
-        // updateStats({
-        //     stats: { 'today-sale': 287, 'today-purchase': 0, ... },
-        //     financials: { 'pay-received': 287, 'cust-due': 0, ... },
-        //     chart: { labels: ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'], sales: [100, 200, 150, 300, 450, 400, 500], purchases: [80, 150, 130, 250, 300, 280, 350] }
-        // });
     </script>
 </body>
 </html>

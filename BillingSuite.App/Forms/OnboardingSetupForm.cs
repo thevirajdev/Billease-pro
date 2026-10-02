@@ -1,7 +1,9 @@
 using System;
 using System.Collections.Generic;
 using System.Drawing;
+using System.Linq;
 using System.Windows.Forms;
+using BillingSuite.App.Data;
 using BillingSuite.App.Models;
 using BillingSuite.App.Services;
 
@@ -30,6 +32,7 @@ namespace BillingSuite.App.Forms
 
         public OnboardingSetupForm()
         {
+            Services.FormIconHelper.ApplyIcon(this);
             BuildUi();
         }
 
@@ -53,15 +56,42 @@ namespace BillingSuite.App.Forms
             var pnlHeader = new Panel
             {
                 Dock = DockStyle.Top,
-                Height = 80,
+                Height = 85,
                 BackColor = Color.FromArgb(15, 23, 42), // Dark slate header
-                Padding = new Padding(24, 16, 24, 16)
+                Padding = new Padding(20, 16, 20, 16)
+            };
+
+            var picLogo = new PictureBox
+            {
+                Size = new Size(52, 52),
+                Location = new Point(20, 16),
+                SizeMode = PictureBoxSizeMode.Zoom
+            };
+            try
+            {
+                var iconPath = System.IO.Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "billease.ico");
+                if (!System.IO.File.Exists(iconPath))
+                    iconPath = System.IO.Path.Combine(Application.StartupPath, "billease.ico");
+
+                if (System.IO.File.Exists(iconPath))
+                {
+                    using var ico = new Icon(iconPath, 64, 64);
+                    picLogo.Image = ico.ToBitmap();
+                }
+            }
+            catch { }
+
+            var pnlHeaderText = new Panel
+            {
+                Location = new Point(82, 14),
+                Size = new Size(680, 56),
+                BackColor = Color.Transparent
             };
 
             var lblTitle = new Label
             {
-                Text = "Welcome to Billease Pro! 🎉",
-                Font = new Font("Segoe UI", 16F, FontStyle.Bold),
+                Text = "Welcome to Billease Pro",
+                Font = new Font("Segoe UI", 15F, FontStyle.Bold),
                 ForeColor = Color.White,
                 Dock = DockStyle.Top,
                 AutoSize = true
@@ -76,8 +106,11 @@ namespace BillingSuite.App.Forms
                 AutoSize = true
             };
 
-            pnlHeader.Controls.Add(lblSubtitle);
-            pnlHeader.Controls.Add(lblTitle);
+            pnlHeaderText.Controls.Add(lblSubtitle);
+            pnlHeaderText.Controls.Add(lblTitle);
+
+            pnlHeader.Controls.Add(pnlHeaderText);
+            pnlHeader.Controls.Add(picLogo);
 
             // Scrollable Content
             var pnlScroll = new Panel
@@ -253,10 +286,12 @@ namespace BillingSuite.App.Forms
                     new(AppSettingKeys.CompanyState, txtState.Text.Trim()),
                     new(AppSettingKeys.CompanyTaxNumber, txtGstNumber.Text.Trim()),
                     new(AppSettingKeys.CurrencySymbol, string.IsNullOrWhiteSpace(txtCurrency.Text) ? "₹" : txtCurrency.Text.Trim()),
-                    new(AppSettingKeys.InvoicePrefix, string.IsNullOrWhiteSpace(txtInvoicePrefix.Text) ? "INV-" : txtInvoicePrefix.Text.Trim())
+                    new(AppSettingKeys.InvoicePrefix, string.IsNullOrWhiteSpace(txtInvoicePrefix.Text) ? "INV-" : txtInvoicePrefix.Text.Trim()),
+                    new("onboarding.completed", "true")
                 };
 
                 AppSettingsService.SetMany(settings);
+                AppSettingsService.Set("onboarding.completed", "true");
                 AppSettingsService.Invalidate();
 
                 // Update current user profile if logged in
@@ -267,6 +302,22 @@ namespace BillingSuite.App.Forms
                     AuthService.CurrentUser.CompanyEmail = txtEmail.Text.Trim();
                     AuthService.CurrentUser.CompanyAddress = txtAddress1.Text.Trim();
                     AuthService.CurrentUser.CompanyTaxNumber = txtGstNumber.Text.Trim();
+
+                    try
+                    {
+                        using var db = new AppDbContext();
+                        var u = db.Users.FirstOrDefault(x => x.Id == AuthService.CurrentUser.Id);
+                        if (u != null)
+                        {
+                            u.CompanyName = companyName;
+                            u.CompanyPhone = txtPhone.Text.Trim();
+                            u.CompanyEmail = txtEmail.Text.Trim();
+                            u.CompanyAddress = txtAddress1.Text.Trim();
+                            u.CompanyTaxNumber = txtGstNumber.Text.Trim();
+                            db.SaveChanges();
+                        }
+                    }
+                    catch { }
                 }
 
                 DialogResult = DialogResult.OK;

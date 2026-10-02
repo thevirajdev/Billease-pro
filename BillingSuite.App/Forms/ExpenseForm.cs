@@ -22,6 +22,7 @@ namespace BillingSuite.App.Forms
 
         public ExpenseForm()
         {
+            Services.FormIconHelper.ApplyIcon(this);
             Text = "Business Expense & Stock Loss Management";
             StartPosition = FormStartPosition.CenterParent;
             WindowState = FormWindowState.Maximized;

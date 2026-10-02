@@ -16,6 +16,7 @@ namespace BillingSuite.App.Forms
         {
             _aiService = new AiAgentService();
             InitializeComponent();
+            Services.FormIconHelper.ApplyIcon(this);
             txtApiKey.Text = _aiService.GetApiKey() ?? "";
         }
 

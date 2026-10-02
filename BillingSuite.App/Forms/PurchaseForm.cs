@@ -21,6 +21,7 @@ namespace BillingSuite.App.Forms
 
         public PurchaseForm()
         {
+            Services.FormIconHelper.ApplyIcon(this);
             Text = "Purchases";
             StartPosition = FormStartPosition.CenterParent;
             Size = new Size(1000, 620);

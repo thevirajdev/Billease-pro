@@ -20,6 +20,7 @@ namespace BillingSuite.App.Forms
 
         public AlertsForm()
         {
+            Services.FormIconHelper.ApplyIcon(this);
             Text = "Alerts";
             StartPosition = FormStartPosition.CenterParent;
             Size = new Size(980, 580);

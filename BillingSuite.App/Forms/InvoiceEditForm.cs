@@ -74,6 +74,13 @@ namespace BillingSuite.App.Forms
         private bool customerConfirmed = false;
         private bool initialFlowRunning = false;
         private System.Windows.Forms.Timer? initialKickTimer;
+        private bool isInitializing = true;
+        private bool customerUserChanged = false;
+        private int? _initialCustomerId;
+        private string? _initialCustomerName;
+        private string? _initialCustomerPhone;
+        private string? _initialCustomerAddress;
+        private string? _initialCustomerGst;
         
         // IAiControllable Implementation
         public object GetAiContext()
@@ -409,7 +416,7 @@ namespace BillingSuite.App.Forms
         {
             try
             {
-                if (!forcePrompt && cmbCustomer.SelectedValue is int) return;
+                if (!forcePrompt && cmbCustomer.SelectedValue is int && cmbCustomer.SelectedIndex >= 0) return;
                 using var dlg = new CustomerQuickDialog();
                 var dr = dlg.ShowDialog(this);
                 if (dr != DialogResult.OK)
@@ -427,7 +434,7 @@ namespace BillingSuite.App.Forms
                     return;
                 }
                 var name = dlg.CustomerName;
-                if (string.IsNullOrWhiteSpace(name)) return;
+                if (string.IsNullOrWhiteSpace(name) && !dlg.SelectedCustomerId.HasValue) return;
                 using var db = new AppDbContext();
                 int id;
                 if (dlg.SelectedCustomerId.HasValue)
@@ -436,10 +443,10 @@ namespace BillingSuite.App.Forms
                 }
                 else
                 {
-                    var existing = db.Customers.FirstOrDefault(c => c.Name.ToLower() == name.ToLower());
+                    var existing = db.Customers.FirstOrDefault(c => c.Name.ToLower() == name!.ToLower());
                     if (existing == null)
                     {
-                        var c = new Customer { Name = name };
+                        var c = new Customer { Name = name! };
                         db.Customers.Add(c);
                         db.SaveChanges();
                         id = c.Id;
@@ -448,10 +455,10 @@ namespace BillingSuite.App.Forms
                 }
                 // Refresh combo
                 var customers = db.Customers.OrderBy(c => c.Name).ToList();
-                cmbCustomer.DataSource = customers;
+                cmbCustomer.DataSource = new BindingSource(customers, null);
                 cmbCustomer.DisplayMember = "Name";
                 cmbCustomer.ValueMember = "Id";
-                cmbCustomer.SelectedValue = id;
+                SelectCustomerById(id);
                 customerConfirmed = true;
             }
             catch { }
@@ -586,11 +593,12 @@ namespace BillingSuite.App.Forms
 
         public InvoiceEditForm(int? invoiceId = null)
         {
+            Services.FormIconHelper.ApplyIcon(this);
             Text = invoiceId == null ? "Create Invoice" : "Edit Invoice";
             isNewInvoice = invoiceId == null;
             StartPosition = FormStartPosition.CenterParent;
             // Fit to current screen working area to avoid header going off-screen
-            var wa = Screen.FromHandle(this.Handle).WorkingArea;
+            var wa = Screen.PrimaryScreen?.WorkingArea ?? new Rectangle(0, 0, 1024, 768);
             int targetW = Math.Min(1100, Math.Max(900, wa.Width - 40));
             int targetH = Math.Min(720, Math.Max(580, wa.Height - 40));
             Size = new System.Drawing.Size(targetW, targetH);
@@ -732,11 +740,101 @@ namespace BillingSuite.App.Forms
             // Make combobox searchable
             cmbCustomer.DropDownStyle = ComboBoxStyle.DropDown;
             cmbCustomer.AutoCompleteMode = AutoCompleteMode.SuggestAppend;
-            cmbCustomer.AutoCompleteSource = AutoCompleteSource.ListItems;
+            try
+            {
+                var ac = new AutoCompleteStringCollection();
+                ac.AddRange(customers.Select(c => c.Name).Where(n => !string.IsNullOrEmpty(n)).ToArray());
+                cmbCustomer.AutoCompleteCustomSource = ac;
+                cmbCustomer.AutoCompleteSource = AutoCompleteSource.CustomSource;
+            }
+            catch
+            {
+                cmbCustomer.AutoCompleteSource = AutoCompleteSource.ListItems;
+            }
             cmbCustomer.DisplayMember = "Name";
             cmbCustomer.ValueMember = "Id";
             cmbCustomer.DataSource = new BindingSource(customers, null);
-            cmbCustomer.DataSourceChanged += (s, e) => { try { if (Model?.CustomerId != null) SelectCustomerById(Model.CustomerId.Value); } catch { } };
+            cmbCustomer.SelectedIndex = -1;
+            cmbCustomer.Text = string.Empty;
+
+            cmbCustomer.KeyDown += (s, e) =>
+            {
+                if (e.KeyCode == Keys.Enter)
+                {
+                    e.Handled = true;
+                    e.SuppressKeyPress = true;
+                    if (cmbCustomer.SelectedItem is Customer c)
+                    {
+                        customerUserChanged = true;
+                        Model.CustomerId = c.Id;
+                        Model.CustomerNameSnapshot = c.Name;
+                        Model.CustomerPhoneSnapshot = c.Phone;
+                        Model.CustomerAddressSnapshot = c.Address1;
+                        Model.CustomerGstSnapshot = c.GstVatNumber;
+                        txtBillAddress.Text = c.Address1 ?? string.Empty;
+                        txtEmail.Text = c.Email ?? string.Empty;
+                        txtSms.Text = c.Phone ?? string.Empty;
+                    }
+                    else if (!string.IsNullOrWhiteSpace(cmbCustomer.Text))
+                    {
+                        var term = cmbCustomer.Text.Trim();
+                        var match = (cmbCustomer.DataSource as BindingSource)?.List.Cast<Customer>()
+                            .FirstOrDefault(x => string.Equals(x.Name, term, StringComparison.OrdinalIgnoreCase) ||
+                                                 x.Name.StartsWith(term, StringComparison.OrdinalIgnoreCase));
+                        if (match != null)
+                        {
+                            customerUserChanged = true;
+                            cmbCustomer.SelectedItem = match;
+                            Model.CustomerId = match.Id;
+                            Model.CustomerNameSnapshot = match.Name;
+                            Model.CustomerPhoneSnapshot = match.Phone;
+                            Model.CustomerAddressSnapshot = match.Address1;
+                            Model.CustomerGstSnapshot = match.GstVatNumber;
+                            txtBillAddress.Text = match.Address1 ?? string.Empty;
+                            txtEmail.Text = match.Email ?? string.Empty;
+                            txtSms.Text = match.Phone ?? string.Empty;
+                        }
+                    }
+                    try { gridItems.Focus(); } catch { }
+                }
+            };
+
+            cmbCustomer.SelectedIndexChanged += (s, e) =>
+            {
+                if (isInitializing) return;
+                if (!isNewInvoice && !customerUserChanged) return;
+                try
+                {
+                    if (cmbCustomer.SelectedItem is Customer c)
+                    {
+                        Model.CustomerId = c.Id;
+                        Model.CustomerNameSnapshot = c.Name;
+                        Model.CustomerPhoneSnapshot = c.Phone;
+                        Model.CustomerAddressSnapshot = c.Address1;
+                        Model.CustomerGstSnapshot = c.GstVatNumber;
+                        txtBillAddress.Text = c.Address1 ?? string.Empty;
+                        txtEmail.Text = c.Email ?? string.Empty;
+                        txtSms.Text = c.Phone ?? string.Empty;
+                    }
+                }
+                catch { }
+            };
+            cmbCustomer.SelectionChangeCommitted += (s, e) => { if (!isInitializing) customerUserChanged = true; };
+            cmbCustomer.TextUpdate += (s, e) => { if (!isInitializing) customerUserChanged = true; };
+            cmbCustomer.Leave += (s, e) =>
+            {
+                if (!isNewInvoice && !customerUserChanged && !string.IsNullOrWhiteSpace(_initialCustomerName))
+                {
+                    if (cmbCustomer.Text != _initialCustomerName)
+                    {
+                        if (_initialCustomerId.HasValue)
+                        {
+                            try { cmbCustomer.SelectedValue = _initialCustomerId.Value; } catch { }
+                        }
+                        cmbCustomer.Text = _initialCustomerName;
+                    }
+                }
+            };
             
             var lblInvTo = new Label { Text = "Invoice to *", Location = new Point(10, 25), AutoSize = true };
             cmbCustomer.SetBounds(80, 22, 200, 23);
@@ -774,6 +872,7 @@ namespace BillingSuite.App.Forms
                     var updatedCustomers = db.Customers.OrderBy(c => c.Name).ToList();
                     cmbCustomer.DataSource = new BindingSource(updatedCustomers, null);
                     cmbCustomer.SelectedValue = addForm.Model.Id;
+                    customerUserChanged = true;
                 }
             };
             var lblBillAddr = new Label { Text = "Address", Location = new Point(10, 55), AutoSize = true };
@@ -1554,6 +1653,11 @@ namespace BillingSuite.App.Forms
                     InvoiceDate = i.InvoiceDate,
                     DueDate = i.DueDate,
                     CustomerId = i.CustomerId,
+                    CustomerNameSnapshot = i.CustomerNameSnapshot,
+                    CustomerPhoneSnapshot = i.CustomerPhoneSnapshot,
+                    CustomerAddressSnapshot = i.CustomerAddressSnapshot,
+                    CustomerGstSnapshot = i.CustomerGstSnapshot,
+                    BackDues = i.BackDues,
                     Status = i.Status,
                     Subtotal = i.Subtotal,
                     TaxAmount = i.TaxAmount,
@@ -1583,25 +1687,73 @@ namespace BillingSuite.App.Forms
                         Notes = p.Notes
                     }).ToList()
                 }).First();
-                // Rebind customers fresh and select by saved id to avoid defaulting to first item
-                try
+
+                if (Model.CustomerId.HasValue)
                 {
-                    using var db2 = new AppDbContext();
-                    var customers2 = db2.Customers.OrderBy(c => c.Name).ToList();
-                    cmbCustomer.BeginInvoke(new Action(() =>
-                    {
-                        var id = Model.CustomerId;
-                        cmbCustomer.DataSource = new BindingSource(customers2, null);
-                        cmbCustomer.DisplayMember = "Name";
-                        cmbCustomer.ValueMember = "Id";
-                        if (id.HasValue) SelectCustomerById(id.Value);
-                    }));
+                    try { Model.Customer = db.Customers.FirstOrDefault(c => c.Id == Model.CustomerId.Value); } catch { }
                 }
-                catch { }
+
+                // Resolve customer details for existing invoice
+                string resolvedName = Model.Customer?.Name ?? Model.CustomerNameSnapshot ?? string.Empty;
+                string resolvedPhone = Model.Customer?.Phone ?? Model.CustomerPhoneSnapshot ?? string.Empty;
+                string resolvedAddr = Model.Customer?.Address1 ?? Model.CustomerAddressSnapshot ?? string.Empty;
+                string resolvedGst = Model.Customer?.GstVatNumber ?? Model.CustomerGstSnapshot ?? string.Empty;
+                string resolvedEmail = Model.Customer?.Email ?? string.Empty;
+
+                _initialCustomerId = Model.CustomerId;
+                _initialCustomerName = resolvedName;
+                _initialCustomerPhone = resolvedPhone;
+                _initialCustomerAddress = resolvedAddr;
+                _initialCustomerGst = resolvedGst;
+
+                txtBillAddress.Text = resolvedAddr;
+                txtSms.Text = resolvedPhone;
+                txtEmail.Text = resolvedEmail;
+
+                // Accurately select customer in cmbCustomer without defaulting to index 0
+                Customer? matched = null;
+                if (Model.CustomerId.HasValue)
+                {
+                    matched = customers.FirstOrDefault(c => c.Id == Model.CustomerId.Value);
+                }
+                if (matched == null && !string.IsNullOrWhiteSpace(resolvedName))
+                {
+                    matched = customers.FirstOrDefault(c => string.Equals(c.Name?.Trim(), resolvedName.Trim(), StringComparison.OrdinalIgnoreCase));
+                }
+
+                if (matched != null)
+                {
+                    cmbCustomer.SelectedItem = matched;
+                    cmbCustomer.SelectedValue = matched.Id;
+                    cmbCustomer.Text = matched.Name;
+                }
+                else
+                {
+                    cmbCustomer.SelectedIndex = -1;
+                    cmbCustomer.Text = resolvedName;
+                }
+
+                this.Shown += (s, e) =>
+                {
+                    if (!isNewInvoice)
+                    {
+                        if (matched != null)
+                        {
+                            cmbCustomer.SelectedItem = matched;
+                            cmbCustomer.SelectedValue = matched.Id;
+                            cmbCustomer.Text = matched.Name;
+                        }
+                        else if (!string.IsNullOrWhiteSpace(resolvedName))
+                        {
+                            cmbCustomer.SelectedIndex = -1;
+                            cmbCustomer.Text = resolvedName;
+                        }
+                        try { this.ActiveControl = gridItems; } catch { }
+                    }
+                };
 
                 dtInvoice.Value = Model.InvoiceDate;
                 dtDue.Value = Model.DueDate ?? DateTime.Today;
-                if (Model.CustomerId.HasValue) SelectCustomerById(Model.CustomerId.Value);
                 txtInvoiceNo.Text = Model.InvoiceNumber ?? string.Empty;
                 BindItemsFromModel();
                 // Parse adjustment values and back dues from PrivateNotes if present
@@ -1643,6 +1795,7 @@ namespace BillingSuite.App.Forms
                 RecalcRequested?.Invoke(this, EventArgs.Empty);
                 Recalc();
             }
+            isInitializing = false;
         }
 
         private string ResolveProductName(InvoiceItem it)
@@ -2104,9 +2257,89 @@ namespace BillingSuite.App.Forms
         private void BtnOk_Click(object? sender, EventArgs e)
         {
             if (preventSave) { try { DialogResult = DialogResult.Cancel; } catch { } return; }
-            if (!autoSaving && cmbCustomer.SelectedItem == null) { MessageBox.Show("Select a customer."); return; }
-            if (cmbCustomer.SelectedValue is int selCustId)
-                Model.CustomerId = selCustId;
+
+            string enteredCustName = cmbCustomer.Text?.Trim() ?? string.Empty;
+
+            // CRITICAL: If this is an existing invoice and user did NOT change the customer,
+            // PRESERVE the existing customer completely! Never overwrite it with dropdown index 0!
+            if (!isNewInvoice && !customerUserChanged)
+            {
+                // Customer untouched by user; strictly preserve initial customer data
+                Model.CustomerId = _initialCustomerId;
+                if (!string.IsNullOrWhiteSpace(_initialCustomerName))
+                    Model.CustomerNameSnapshot = _initialCustomerName;
+                if (!string.IsNullOrWhiteSpace(_initialCustomerPhone))
+                    Model.CustomerPhoneSnapshot = _initialCustomerPhone;
+                if (!string.IsNullOrWhiteSpace(_initialCustomerAddress))
+                    Model.CustomerAddressSnapshot = _initialCustomerAddress;
+                if (!string.IsNullOrWhiteSpace(_initialCustomerGst))
+                    Model.CustomerGstSnapshot = _initialCustomerGst;
+            }
+            else
+            {
+                if (!autoSaving && string.IsNullOrWhiteSpace(enteredCustName) && (cmbCustomer.SelectedIndex < 0 || cmbCustomer.SelectedItem == null))
+                {
+                    MessageBox.Show("Please select or enter a customer.", "Customer Required", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    return;
+                }
+
+                // Resolve Customer entity:
+                // 1) Selected item in dropdown if name matches or entered name is empty
+                // 2) By entered name in DB
+                // 3) Auto-create if new name entered
+                using (var dbCust = new AppDbContext())
+                {
+                    Customer? resolvedCust = null;
+                    if (cmbCustomer.SelectedIndex >= 0 && cmbCustomer.SelectedItem is Models.Customer selCust &&
+                        (string.IsNullOrWhiteSpace(enteredCustName) || string.Equals(selCust.Name, enteredCustName, StringComparison.OrdinalIgnoreCase)))
+                    {
+                        resolvedCust = dbCust.Customers.FirstOrDefault(c => c.Id == selCust.Id);
+                    }
+                    else if (!string.IsNullOrWhiteSpace(enteredCustName))
+                    {
+                        resolvedCust = dbCust.Customers.FirstOrDefault(c => c.Name.ToLower() == enteredCustName.ToLower());
+                        if (resolvedCust == null)
+                        {
+                            resolvedCust = new Customer
+                            {
+                                Name = enteredCustName,
+                                Address1 = string.IsNullOrWhiteSpace(txtBillAddress.Text) ? null : txtBillAddress.Text.Trim(),
+                                Phone = string.IsNullOrWhiteSpace(txtSms.Text) ? null : txtSms.Text.Trim(),
+                                Email = string.IsNullOrWhiteSpace(txtEmail.Text) ? null : txtEmail.Text.Trim()
+                            };
+                            dbCust.Customers.Add(resolvedCust);
+                            dbCust.SaveChanges();
+                        }
+                    }
+                    else if (Model.CustomerId.HasValue)
+                    {
+                        resolvedCust = dbCust.Customers.FirstOrDefault(c => c.Id == Model.CustomerId.Value);
+                    }
+
+                    if (resolvedCust != null)
+                    {
+                        Model.CustomerId = resolvedCust.Id;
+                        Model.CustomerNameSnapshot = resolvedCust.Name;
+                        Model.CustomerPhoneSnapshot = resolvedCust.Phone ?? (string.IsNullOrWhiteSpace(txtSms.Text) ? null : txtSms.Text.Trim());
+                        Model.CustomerAddressSnapshot = resolvedCust.Address1 ?? (string.IsNullOrWhiteSpace(txtBillAddress.Text) ? null : txtBillAddress.Text.Trim());
+                        Model.CustomerGstSnapshot = resolvedCust.GstVatNumber;
+                    }
+                    else if (!string.IsNullOrWhiteSpace(enteredCustName))
+                    {
+                        Model.CustomerId = null;
+                        Model.CustomerNameSnapshot = enteredCustName;
+                        Model.CustomerPhoneSnapshot = string.IsNullOrWhiteSpace(txtSms.Text) ? null : txtSms.Text.Trim();
+                        Model.CustomerAddressSnapshot = string.IsNullOrWhiteSpace(txtBillAddress.Text) ? null : txtBillAddress.Text.Trim();
+                        Model.CustomerGstSnapshot = null;
+                    }
+                    else if (!autoSaving)
+                    {
+                        MessageBox.Show("Please select or enter a customer.", "Customer Required", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                        return;
+                    }
+                }
+            }
+
             Model.InvoiceDate = dtInvoice.Value.Date;
             Model.DueDate = dtDue.Value.Date;
             Model.InvoiceNumber = txtInvoiceNo.Text?.Trim();
@@ -2128,27 +2361,6 @@ namespace BillingSuite.App.Forms
                 Model.InvoiceNumber = $"{prefix}{next.ToString().PadLeft(padding, '0')}";
                 // Increment the counter so the next invoice gets a unique number
                 AppSettingsService.Set(AppSettingKeys.InvoiceNextNumber, (next + 1).ToString());
-            }
-
-            // Snapshot Customer Details
-            if (cmbCustomer.SelectedItem is Models.Customer cust)
-            {
-                Model.CustomerNameSnapshot = cust.Name;
-                Model.CustomerPhoneSnapshot = cust.Phone;
-                Model.CustomerAddressSnapshot = cust.Address1;
-                Model.CustomerGstSnapshot = cust.GstVatNumber;
-            }
-            else if (cmbCustomer.SelectedValue is int cidSnapshot)
-            {
-                using var dbCust = new AppDbContext();
-                var custDb = dbCust.Customers.FirstOrDefault(c => c.Id == cidSnapshot);
-                if (custDb != null)
-                {
-                    Model.CustomerNameSnapshot = custDb.Name;
-                    Model.CustomerPhoneSnapshot = custDb.Phone;
-                    Model.CustomerAddressSnapshot = custDb.Address1;
-                    Model.CustomerGstSnapshot = custDb.GstVatNumber;
-                }
             }
 
             // collect items
@@ -2229,8 +2441,9 @@ namespace BillingSuite.App.Forms
                 dbSettle.SaveChanges();
 
                 // 2. If back dues are checked, settle the newly outstanding past invoices
-                if (Model.IncludedBackDues && cmbCustomer.SelectedValue is int cidBD)
+                if (Model.IncludedBackDues && Model.CustomerId.HasValue)
                 {
+                    int cidBD = Model.CustomerId.Value;
                     var oldInvoices = dbSettle.Invoices
                         .Where(i => i.CustomerId == cidBD && i.Status != InvoiceStatus.Paid && i.Status != InvoiceStatus.Void && i.Id != Model.Id)
                         .OrderBy(i => i.InvoiceDate)
@@ -2299,6 +2512,10 @@ namespace BillingSuite.App.Forms
                 invEntity.InvoiceDate = Model.InvoiceDate;
                 invEntity.DueDate = Model.DueDate;
                 invEntity.CustomerId = Model.CustomerId;
+                invEntity.CustomerNameSnapshot = Model.CustomerNameSnapshot;
+                invEntity.CustomerPhoneSnapshot = Model.CustomerPhoneSnapshot;
+                invEntity.CustomerAddressSnapshot = Model.CustomerAddressSnapshot;
+                invEntity.CustomerGstSnapshot = Model.CustomerGstSnapshot;
                 invEntity.Status = Model.Status;
                 invEntity.Subtotal = Model.Subtotal;
                 invEntity.TaxAmount = Model.TaxAmount;
@@ -2312,9 +2529,14 @@ namespace BillingSuite.App.Forms
                 var adj = $"Adj:ExtraName={txtExtraCostName.Text};ExtraAmt={numExtraCost.Value};ExtraPct={(chkExtraPercent.Checked?1:0)};DiscAmt={numDiscount.Value};DiscPct={(chkDiscountPercent.Checked?1:0)};BackAmt={backDuesAmount};BackInc={(Model.IncludedBackDues?1:0)};RoundOff={roundOff2};";
                 invEntity.PrivateNotes = terms + adj;
 
-                // Replace items
+                // Replace items safely without duplicate accumulation
+                if (invEntity.Items != null && invEntity.Items.Count > 0)
+                {
+                    dbSave.InvoiceItems.RemoveRange(invEntity.Items);
+                }
                 invEntity.Items = Model.Items.Select(it => new InvoiceItem
                 {
+                    InvoiceId = invEntity.Id,
                     ProductId = it.ProductId,
                     ProductIdRef = it.ProductIdRef,
                     ProductName = it.ProductName,
@@ -2323,16 +2545,23 @@ namespace BillingSuite.App.Forms
                     Price = it.Price,
                     CostPrice = it.CostPrice ?? 0m, // FIX: Default to 0 for old DB compatibility
                     Quantity = it.Quantity,
-                    LineTotal = it.LineTotal
+                    LineTotal = it.LineTotal,
+                    OwnerUserId = invEntity.OwnerUserId
                 }).ToList();
 
-                // Replace payments
+                // Replace payments safely without duplicate accumulation
+                if (invEntity.Payments != null && invEntity.Payments.Count > 0)
+                {
+                    dbSave.Payments.RemoveRange(invEntity.Payments);
+                }
                 invEntity.Payments = (Model.Payments ?? new System.Collections.Generic.List<Payment>()).Select(p => new Payment
                 {
+                    InvoiceId = invEntity.Id,
                     Date = p.Date,
                     Method = p.Method,
                     Amount = p.Amount,
-                    Notes = p.Notes
+                    Notes = p.Notes,
+                    OwnerUserId = invEntity.OwnerUserId
                 }).ToList();
 
                 if (invEntity.Id == 0) dbSave.Invoices.Add(invEntity); else dbSave.Invoices.Update(invEntity);
@@ -2717,9 +2946,16 @@ namespace BillingSuite.App.Forms
         // Ensure shortcuts work even when a control has focus, and arrow keys immediately drive the grid
         protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
         {
-            // Arrow keys: move focus to items grid so navigation works without clicking
+            // Arrow keys: do NOT steal focus if user is inside a ComboBox, TextBox, or other input controls
             if (keyData == Keys.Up || keyData == Keys.Down || keyData == Keys.Left || keyData == Keys.Right)
             {
+                var focused = this.ActiveControl;
+                bool isInputControl = focused is ComboBox || focused is TextBox || focused is NumericUpDown || focused is DateTimePicker;
+                if (cmbCustomer.Focused || cmbCustomer.ContainsFocus || isInputControl)
+                {
+                    return base.ProcessCmdKey(ref msg, keyData);
+                }
+
                 if (!gridItems.Focused && !gridItems.ContainsFocus)
                 {
                     try

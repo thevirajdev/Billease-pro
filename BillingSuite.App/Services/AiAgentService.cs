@@ -348,5 +348,85 @@ namespace BillingSuite.App.Services
 
             return text.Trim();
         }
+
+        public async Task<string> GenerateContentFromPdfAsync(byte[] pdfBytes, string prompt, string? systemInstruction = null)
+        {
+            var key = GetApiKey();
+            if (string.IsNullOrEmpty(key))
+                throw new InvalidOperationException("Gemini API Key is not configured. Please set your Gemini API Key in Settings -> AI / Integrations.");
+
+            var model = Model;
+            var url = $"{BaseUrl}{model}:generateContent?key={key}";
+
+            var base64Pdf = Convert.ToBase64String(pdfBytes);
+
+            var parts = new List<object>
+            {
+                new
+                {
+                    inline_data = new
+                    {
+                        mime_type = "application/pdf",
+                        data = base64Pdf
+                    }
+                },
+                new { text = prompt }
+            };
+
+            object requestBody;
+            if (!string.IsNullOrWhiteSpace(systemInstruction))
+            {
+                requestBody = new
+                {
+                    system_instruction = new
+                    {
+                        parts = new[] { new { text = systemInstruction } }
+                    },
+                    contents = new[]
+                    {
+                        new { parts = parts.ToArray() }
+                    },
+                    generationConfig = new
+                    {
+                        responseMimeType = "application/json"
+                    }
+                };
+            }
+            else
+            {
+                requestBody = new
+                {
+                    contents = new[]
+                    {
+                        new { parts = parts.ToArray() }
+                    },
+                    generationConfig = new
+                    {
+                        responseMimeType = "application/json"
+                    }
+                };
+            }
+
+            var jsonRequest = JsonConvert.SerializeObject(requestBody);
+            var content = new StringContent(jsonRequest, Encoding.UTF8, "application/json");
+
+            var response = await _httpClient.PostAsync(url, content);
+            if (!response.IsSuccessStatusCode)
+            {
+                var error = await response.Content.ReadAsStringAsync();
+                throw new Exception($"Gemini API Error ({response.StatusCode}): {error}");
+            }
+
+            var jsonResponse = await response.Content.ReadAsStringAsync();
+            var geminiData = JObject.Parse(jsonResponse);
+            var text = geminiData["candidates"]?[0]?["content"]?["parts"]?[0]?["text"]?.ToString();
+
+            if (string.IsNullOrWhiteSpace(text))
+            {
+                throw new Exception("Empty response from Gemini.");
+            }
+
+            return text.Trim();
+        }
     }
 }

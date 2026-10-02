@@ -10,7 +10,6 @@ using BillingSuite.App.Models;
 using System.Collections.Generic;
 using System.IO;
 using System.Text.Json;
-using Microsoft.EntityFrameworkCore;
 
 namespace BillingSuite.App.Forms
 {
@@ -44,6 +43,7 @@ namespace BillingSuite.App.Forms
             Size = new Size(1100, 850);
             StartPosition = FormStartPosition.CenterScreen;
             BackColor = Color.White;
+            Services.FormIconHelper.ApplyIcon(this);
             
             BuildUI();
             InitializeDashboard();
@@ -314,7 +314,7 @@ namespace BillingSuite.App.Forms
                         .Where(ii => ii.Invoice.InvoiceDate >= start && ii.Invoice.InvoiceDate <= end)
                         .Sum(ii => (decimal?)ii.LineTotal - (ii.Quantity * (ii.CostPrice ?? 0m))) ?? 0m;
                     
-                    return (s, p, profit);
+                    return (Math.Round(s, 2), Math.Round(p, 2), Math.Round(profit, 2));
                 }
 
                 var d = GetStats(today, today.AddDays(1).AddSeconds(-1));
@@ -333,19 +333,18 @@ namespace BillingSuite.App.Forms
                 lifetime_purchase = db.Purchases.Sum(i => (decimal?)i.Total) ?? 0m;
 
                 // 3. LIFETIME MARGIN (Direct SQL - NO TO-LIST()!)
-                // This was the primary cause of the hang on large databases
                 lifetime_margin = db.InvoiceItems.Sum(it => it.LineTotal - (it.Quantity * (it.CostPrice ?? 0m)));
 
                 var financials = new
                 {
-                    pay_received = db.Payments.Sum(p => (decimal?)p.Amount) ?? 0m,
-                    cust_due = db.Invoices.Sum(i => (decimal?)i.Total - i.TotalPaid) ?? 0m,
-                    pay_sent = db.PurchasePayments.Sum(p => (decimal?)p.Amount) ?? 0m,
-                    sup_due = db.Purchases.Sum(p => (decimal?)p.Total - (p.Paid ?? 0m)) ?? 0m,
-                    manual_expenses = db.Expenses.Sum(e => (decimal?)e.Amount) ?? 0m,
-                    total_profit = (lifetime_margin - expiredLoss - damageLoss) - (db.Expenses.Sum(e => (decimal?)e.Amount) ?? 0m),
-                    lt_sale = lifetime_sales,
-                    lt_purchase = lifetime_purchase
+                    pay_received = Math.Round(db.Payments.Sum(p => (decimal?)p.Amount) ?? 0m, 2),
+                    cust_due = Math.Round(db.Invoices.Sum(i => (decimal?)i.Total - i.TotalPaid) ?? 0m, 2),
+                    pay_sent = Math.Round(db.PurchasePayments.Sum(p => (decimal?)p.Amount) ?? 0m, 2),
+                    sup_due = Math.Round(db.Purchases.Sum(p => (decimal?)p.Total - (p.Paid ?? 0m)) ?? 0m, 2),
+                    manual_expenses = Math.Round(db.Expenses.Sum(e => (decimal?)e.Amount) ?? 0m, 2),
+                    total_profit = Math.Round((lifetime_margin - expiredLoss - damageLoss) - (db.Expenses.Sum(e => (decimal?)e.Amount) ?? 0m), 2),
+                    lt_sale = Math.Round(lifetime_sales, 2),
+                    lt_purchase = Math.Round(lifetime_purchase, 2)
                 };
 
                 var financials_dash = new Dictionary<string, decimal> {
@@ -524,57 +523,63 @@ namespace BillingSuite.App.Forms
         {
             try
             {
-                // Simplified grouping for better database compatibility
-                var rawData = db.InvoiceItems
+                var rawItems = db.InvoiceItems
                     .AsNoTracking()
                     .Where(ii => ii.ProductName != null && ii.ProductName != "")
-                    .GroupBy(ii => ii.ProductName)
-                    .Select(g => new
+                    .Select(ii => new
                     {
-                        Name = g.Key,
-                        Qty = g.Sum(x => x.Quantity),
-                        Rev = g.Sum(x => x.LineTotal),
-                        CostAmt = g.Sum(x => x.Quantity * (x.CostPrice ?? 0m))
+                        ProductName = ii.ProductName!,
+                        Quantity = ii.Quantity,
+                        LineTotal = ii.LineTotal,
+                        CostPrice = ii.CostPrice ?? 0m
                     })
-                    .OrderByDescending(x => x.Rev)
-                    .Take(50)
                     .ToList();
 
-                // Final formatting on the client side
-                var perf = rawData.Select(x => new
-                {
-                    ProductName = x.Name,
-                    QtySold = x.Qty,
-                    TotalRevenue = x.Rev,
-                    TotalProfit = x.Rev - x.CostAmt
-                }).ToList();
+                var perf = rawItems
+                    .GroupBy(x => x.ProductName)
+                    .Select(g => new
+                    {
+                        ProductName = g.Key,
+                        QtySold = Math.Round(g.Sum(x => x.Quantity), 2),
+                        TotalRevenue = Math.Round(g.Sum(x => x.LineTotal), 2),
+                        TotalProfit = Math.Round(g.Sum(x => x.LineTotal - (x.Quantity * x.CostPrice)), 2)
+                    })
+                    .ToList();
 
                 gridBestSellers.DataSource = perf.OrderByDescending(x => x.TotalRevenue).Take(10).ToList();
                 gridWorstSellers.DataSource = perf.OrderBy(x => x.TotalRevenue).Take(10).ToList();
             }
             catch (Exception ex)
             {
-                Console.WriteLine("Performance Insight Error: " + ex.Message);
+                System.Diagnostics.Debug.WriteLine("Performance Insight Error: " + ex.Message);
             }
         }
 
         private void LoadPriceComparison()
         {
-            if (!_selectedComparisonProductId.HasValue) return;
             try
             {
                 using var db = new AppDbContext();
-                var history = db.PurchaseItems
+                var query = db.PurchaseItems
                     .Include(pi => pi.Purchase).ThenInclude(p => p.Supplier)
-                    .Where(pi => pi.ProductId == _selectedComparisonProductId.Value)
+                    .AsNoTracking();
+
+                if (_selectedComparisonProductId.HasValue)
+                {
+                    query = query.Where(pi => pi.ProductId == _selectedComparisonProductId.Value);
+                }
+
+                var history = query
                     .OrderByDescending(pi => pi.Purchase.PurchaseDate)
+                    .Take(50)
                     .Select(pi => new
                     {
+                        Product = pi.ProductName ?? "N/A",
                         Supplier = pi.Purchase.Supplier != null ? pi.Purchase.Supplier.Name : "N/A",
-                        Date = pi.Purchase.PurchaseDate,
-                        Cost = pi.CostPrice,
-                        Mrp = pi.Mrp,
-                        Batch = pi.BatchNumber
+                        Date = pi.Purchase.PurchaseDate.ToString("dd/MM/yyyy"),
+                        Cost = Math.Round(pi.CostPrice ?? 0m, 2),
+                        Mrp = Math.Round(pi.Mrp ?? 0m, 2),
+                        Batch = pi.BatchNumber ?? "N/A"
                     })
                     .ToList();
                 gridPriceComparison.DataSource = history;

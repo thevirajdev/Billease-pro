@@ -37,7 +37,8 @@ namespace BillingSuite.App.Services
 
                     // Perform the atomic backup
                     // This creates a single, consistent .bak file even if WAL mode is on
-                    db.Database.ExecuteSqlRaw($"VACUUM INTO '{sfd.FileName}'");
+                    string vacuumSql = "VACUUM INTO '" + sfd.FileName.Replace("'", "''") + "'";
+                    db.Database.ExecuteSqlRaw(vacuumSql);
 
                     MessageBox.Show($"Database backup successful!\n\nLocation: {sfd.FileName}\n\nThis file contains all your current data.", 
                         "Backup Complete", MessageBoxButtons.OK, MessageBoxIcon.Information);
@@ -111,6 +112,11 @@ namespace BillingSuite.App.Services
             try
             {
                 using var db = new AppDbContext();
+                // CRITICAL DATA ISOLATION:
+                // Only claim unowned/legacy records during a 1.0 upgrade when there is AT MOST one account.
+                // If there are multiple accounts, claiming unowned records would cause data leakage between accounts!
+                if (db.Users.Count() > 1) return 0;
+
                 var conn = db.Database.GetDbConnection();
                 if (conn.State != System.Data.ConnectionState.Open) conn.Open();
 
@@ -192,7 +198,10 @@ namespace BillingSuite.App.Services
                 if (File.Exists(destFile)) File.Delete(destFile);
 
                 using (var db = new Data.AppDbContext())
-                    db.Database.ExecuteSqlRaw($"VACUUM INTO '{destFile}'");
+                {
+                    string vacuumSql = "VACUUM INTO '" + destFile.Replace("'", "''") + "'";
+                    db.Database.ExecuteSqlRaw(vacuumSql);
+                }
 
                 // Record the run time
                 AppSettingsService.Set(lastBackupKey, DateTime.UtcNow.ToString("o"));

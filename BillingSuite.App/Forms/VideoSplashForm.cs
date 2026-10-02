@@ -37,37 +37,52 @@ namespace BillingSuite.App.Forms
             DoubleBuffered = true;
             KeyPreview = true;
 
-            // Load app icon if available
+            // Load app icon using FormIconHelper (reads from exe embedded icon first)
             try
             {
-                var iconPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "billease.ico");
-                if (File.Exists(iconPath))
-                    Icon = new Icon(iconPath);
+                var icon = Services.FormIconHelper.GetAppIcon();
+                if (icon != null) Icon = icon;
             }
             catch { }
         }
+
+        private DateTime _openedTime = DateTime.Now;
 
         private void InitializeMedia()
         {
             try
             {
-                var videoPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "splash.mp4");
-                if (!File.Exists(videoPath))
+                var candidatePaths = new[]
                 {
-                    videoPath = Path.Combine(Application.StartupPath, "splash.mp4");
+                    Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "splash.mp4"),
+                    Path.Combine(Application.StartupPath, "splash.mp4"),
+                    Path.Combine(Directory.GetCurrentDirectory(), "splash.mp4"),
+                    Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "..", "..", "..", "splash.mp4")
+                };
+
+                string? videoPath = null;
+                foreach (var p in candidatePaths)
+                {
+                    if (File.Exists(p))
+                    {
+                        videoPath = p;
+                        break;
+                    }
                 }
 
-                if (!File.Exists(videoPath))
+                if (string.IsNullOrEmpty(videoPath))
                 {
                     // Video missing, close immediately
                     Load += (s, e) => CloseSplash();
                     return;
                 }
 
+                _openedTime = DateTime.Now;
+
                 _mediaElement = new MediaElement
                 {
                     LoadedBehavior = MediaState.Play,
-                    UnloadedBehavior = MediaState.Close,
+                    UnloadedBehavior = MediaState.Manual,
                     Stretch = Stretch.UniformToFill,
                     Volume = 1.0,
                     Source = new Uri(videoPath, UriKind.Absolute)
@@ -83,15 +98,15 @@ namespace BillingSuite.App.Forms
                     BackColor = System.Drawing.Color.Black
                 };
 
-                // Mouse click to skip
-                _elementHost.Click += (s, e) => CloseSplash();
-                Click += (s, e) => CloseSplash();
-                KeyDown += (s, e) => CloseSplash();
+                // Mouse click to skip (after 600ms grace period)
+                _elementHost.Click += (s, e) => { if ((DateTime.Now - _openedTime).TotalMilliseconds > 600) CloseSplash(); };
+                Click += (s, e) => { if ((DateTime.Now - _openedTime).TotalMilliseconds > 600) CloseSplash(); };
+                KeyDown += (s, e) => { if ((DateTime.Now - _openedTime).TotalMilliseconds > 600) CloseSplash(); };
 
                 Controls.Add(_elementHost);
 
-                // Safety timeout (8.5 seconds max)
-                _timeoutTimer = new System.Windows.Forms.Timer { Interval = 8500 };
+                // Safety timeout (10 seconds max)
+                _timeoutTimer = new System.Windows.Forms.Timer { Interval = 10000 };
                 _timeoutTimer.Tick += (s, e) => CloseSplash();
                 _timeoutTimer.Start();
             }

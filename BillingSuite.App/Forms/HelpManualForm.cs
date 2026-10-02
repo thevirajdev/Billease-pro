@@ -37,6 +37,7 @@ namespace BillingSuite.App.Forms
         public HelpManualForm(string? initialTopic = null)
         {
             InitializeComponent();
+            Services.FormIconHelper.ApplyIcon(this);
             LoadManualContent();
             PopulateNavigation();
 

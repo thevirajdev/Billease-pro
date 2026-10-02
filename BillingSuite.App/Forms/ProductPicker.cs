@@ -46,6 +46,7 @@ namespace BillingSuite.App.Forms
 
         public ProductPicker(int customerId)
         {
+            Services.FormIconHelper.ApplyIcon(this);
             _customerId = customerId;
             InitializeComponents();
             LoadProducts();

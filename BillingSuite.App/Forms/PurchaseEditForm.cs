@@ -168,9 +168,10 @@ namespace BillingSuite.App.Forms
 
         public PurchaseEditForm(int? purchaseId = null)
         {
+            Services.FormIconHelper.ApplyIcon(this);
             Text = purchaseId == null ? "Create Purchase" : "Edit Purchase";
             StartPosition = FormStartPosition.CenterParent;
-            var wa = Screen.FromHandle(this.Handle).WorkingArea;
+            var wa = Screen.PrimaryScreen?.WorkingArea ?? new Rectangle(0, 0, 1024, 768);
             int targetW = Math.Min(1100, Math.Max(900, wa.Width - 40));
             int targetH = Math.Min(720, Math.Max(580, wa.Height - 40));
             Size = new System.Drawing.Size(targetW, targetH);
@@ -204,7 +205,7 @@ namespace BillingSuite.App.Forms
             tsSearch.Click += (s, e) => {
                 try { using var f = new PurchaseSearchForm(); f.ShowDialog(this); } catch { }
             };
-            tsAiImport.Text = "PDF Import";
+            tsAiImport.Text = "📁 PDF Import";
             tsAiImport.Click += (s, e) => DoAiImport();
             tool.Items.AddRange(new ToolStripItem[] { tsSelectSupplier, new ToolStripSeparator(), tsAddLine, tsDeleteLine, tsSearch, tsAiImport, new ToolStripSeparator(), tsPreview, tsPrint, tsTemplate, tsEmail, tsMarkPaid, tsVoid, tsSave });
             pnlToolbar.Controls.Add(tool);
@@ -1562,6 +1563,23 @@ namespace BillingSuite.App.Forms
             }
             catch { }
         }
+        private static JToken? GetJsonProp(JToken container, params string[] names)
+        {
+            if (container is JObject obj)
+            {
+                foreach (var name in names)
+                {
+                    var prop = obj.Properties().FirstOrDefault(p =>
+                        string.Equals(p.Name, name, StringComparison.OrdinalIgnoreCase) ||
+                        string.Equals(p.Name.Replace("_", " ").Replace("-", " "), name.Replace("_", " ").Replace("-", " "), StringComparison.OrdinalIgnoreCase) ||
+                        string.Equals(p.Name.Replace(" ", "").Replace("_", "").Replace("-", ""), name.Replace(" ", "").Replace("_", "").Replace("-", ""), StringComparison.OrdinalIgnoreCase));
+                    if (prop != null && prop.Value != null && prop.Value.Type != JTokenType.Null)
+                        return prop.Value;
+                }
+            }
+            return null;
+        }
+
         private async void DoAiImport()
         {
             try
@@ -1569,195 +1587,223 @@ namespace BillingSuite.App.Forms
                 using var dlg = new AiImportDialog();
                 if (dlg.ShowDialog(this) == DialogResult.OK)
                 {
-                    var json = dlg.JsonText;
-                    if (string.IsNullOrWhiteSpace(json)) return;
-
-                    var root = JObject.Parse(json);
-                    
-                    // Header
-                    var supplierName = root["SUPPLIER"]?.ToString();
-                    if (!string.IsNullOrWhiteSpace(supplierName))
-                    {
-                        var sup = _allSuppliers.FirstOrDefault(s => string.Equals(s.Name, supplierName, StringComparison.OrdinalIgnoreCase));
-                        if (sup != null) cmbSupplier.SelectedValue = sup.Id;
-                        else cmbSupplier.Text = supplierName;
-                    }
-
-                    txtInvoiceNo.Text = root["BILL NO"]?.ToString() ?? "";
-                    var dateStr = root["DATE"]?.ToString();
-                    if (!string.IsNullOrWhiteSpace(dateStr) && DateTime.TryParse(dateStr, out var dt))
-                    {
-                        dtPurchase.Value = dt;
-                    }
-
-                    // Products Collection & Matching
-                    var productsJson = root["products"] as JArray;
-                    if (productsJson == null) return;
-
-                    var reviewItems = new List<AiPurchaseItem>();
-                    using (var db = new AppDbContext())
-                    {
-                        var allProducts = db.Products.ToList(); // Load into memory to avoid SQL translation errors
-                        var allDbProductNames = allProducts.Select(p => p.Name).ToList();
-                        var inputNames = productsJson.Select(p => p["NAME"]?.ToString() ?? "").Where(n => !string.IsNullOrEmpty(n)).Distinct().ToList();
-
-                        // Call AI for robust Matching
-                        var aiService = new AiAgentService();
-                        var aiMatches = await aiService.PerformProductMatchingAsync(inputNames, allDbProductNames);
-
-                        foreach (var p in productsJson)
-                        {
-                            var inputName = p["NAME"]?.ToString() ?? "";
-                            
-                            // Use AI result if it successfully matched something
-                            string? aiSuggestedName = null;
-                            if (aiMatches.TryGetValue(inputName, out var suggestion)) aiSuggestedName = suggestion;
-
-                            Product? matchedProd = null;
-                            if (!string.IsNullOrEmpty(aiSuggestedName))
-                            {
-                                // In-memory search (case-insensitive)
-                                matchedProd = allProducts.FirstOrDefault(x => string.Equals(x.Name, aiSuggestedName, StringComparison.OrdinalIgnoreCase));
-                            }
-                            
-                            // fallback logic if AI didn't return a match or the match was invalid
-                            if (matchedProd == null)
-                            {
-                                matchedProd = allProducts.FirstOrDefault(x => string.Equals(x.Name, inputName, StringComparison.OrdinalIgnoreCase));
-                            }
-                            
-                            if (matchedProd == null)
-                            {
-                                // Intelligent Keyword Fallback
-                                var words = inputName.Split(new[] { ' ', '-', '/', '.' }, StringSplitOptions.RemoveEmptyEntries)
-                                                     .Where(w => w.Length > 2).ToList();
-                                
-                                if (words.Count > 0)
-                                {
-                                    var firstWord = words[0];
-                                    // Find all products starting with the same brand name
-                                    var candidates = allProducts.Where(p => p.Name.StartsWith(firstWord, StringComparison.OrdinalIgnoreCase)).ToList();
-                                    
-                                    if (candidates.Count == 1)
-                                    {
-                                        matchedProd = candidates[0];
-                                    }
-                                    else if (candidates.Count > 1)
-                                    {
-                                        // Pick the one with the most matching keywords
-                                        matchedProd = candidates
-                                            .OrderByDescending(c => words.Count(w => c.Name.Contains(w, StringComparison.OrdinalIgnoreCase)))
-                                            .ThenBy(c => Math.Abs(c.Name.Length - inputName.Length))
-                                            .FirstOrDefault();
-                                    }
-                                }
-                            }
-                            
-                            if (matchedProd == null)
-                            {
-                                // Last resort simple contains
-                                matchedProd = allProducts.FirstOrDefault(x => x.Name.Contains(inputName, StringComparison.OrdinalIgnoreCase) || inputName.Contains(x.Name, StringComparison.OrdinalIgnoreCase));
-                            }
-
-                            // Robust Parsing & Auto-Calculation
-                            var mrp = ParseDecimal(p["MRP"]);
-                            var rate = ParseDecimal(p["RATE"]);
-                            var cost = ParseDecimal(p["COST"] ?? p["CP"]);
-                            var sell = ParseDecimal(p["SELL_PRICE"] ?? p["SP"]);
-                            var qty = ParseDecimal(p["QTY"]) ?? 0;
-                            var disc = ParseDecimal(p["DISC"] ?? p["DISCOUNT"]) ?? 0;
-                            var cgst = ParseDecimal(p["CGST"]) ?? 0;
-                            var sgst = ParseDecimal(p["SGST"]) ?? 0;
-                            var igst = ParseDecimal(p["IGST"]) ?? 0;
-
-                            decimal totalTaxFactor = 1 + (cgst + sgst + igst) / 100m;
-                            decimal discFactor = 1 - disc / 100m;
-
-                            if (cost == null && rate != null)
-                            {
-                                cost = Math.Round(rate.Value * discFactor * totalTaxFactor, 2);
-                            }
-                            else if (rate == null && cost != null)
-                            {
-                                if (discFactor * totalTaxFactor > 0)
-                                    rate = Math.Round(cost.Value / (discFactor * totalTaxFactor), 2);
-                            }
-
-                            // Keep the EXACT name as pasted in the JSON; do not rename/assume
-                            reviewItems.Add(new AiPurchaseItem
-                            {
-                                Sku = string.Empty, // Manual confirmation required as per prior directive
-                                ProductName = inputName,
-                                BatchNumber = p["BATCH NO"]?.ToString() ?? p["BATCH"]?.ToString(),
-                                Expiry = p["EXPIRY"]?.ToString(),
-                                Mrp = mrp,
-                                SellingPrice = sell,
-                                CostPrice = cost,
-                                Quantity = qty,
-                                Rate = rate,
-                                Hsn = p["HSN"]?.ToString() ?? matchedProd?.Hsn,
-                                Pack = p["PACK"]?.ToString(),
-                                Mkt = p["MKT"]?.ToString() ?? p["MARKETED BY"]?.ToString() ?? matchedProd?.MarketedBy,
-                                Bonus = p["BONUS"]?.ToString(),
-                                Disc = disc,
-                                Cgst = cgst,
-                                Sgst = sgst,
-                                Igst = igst,
-                                Category = p["CATEGORY"]?.ToString() ?? matchedProd?.Category
-                            });
-                        }
-                    }
-
-                    // Show Confirmation Dialog
-                    var aiResp = new AiActionResponse
-                    {
-                        Action = "create_purchase",
-                        Message = $"AI matched {reviewItems.Count} items. All details (Pack, Mkt, Taxes, etc.) have been imported. Please verify.",
-                        Data = JObject.FromObject(new AiPurchaseData { Items = reviewItems })
-                    };
-
-                    using (var reviewDlg = new AiActionReviewForm(aiResp))
-                    {
-                        if (reviewDlg.ShowDialog(this) != DialogResult.OK) return;
-                        
-                        // Approved! Add to Grid
-                        autoSaving = true;
-                        gridItems.Rows.Clear();
-                        
-                        var updatedData = reviewDlg.ResultResponse.Data.ToObject<AiPurchaseData>();
-                        if (updatedData == null) return;
-
-                        foreach (var item in updatedData.Items)
-                        {
-                            int idx = gridItems.Rows.Add();
-                            var r = gridItems.Rows[idx];
-                            r.Cells["colSku"].Value = item.Sku; // Use SKU from dialog (blank or manual)
-                            r.Cells["colName"].Value = item.ProductName;
-                            r.Cells["colBatch"].Value = item.BatchNumber;
-                            r.Cells["colExpiry"].Value = item.Expiry;
-                            r.Cells["colMrp"].Value = item.Mrp;
-                            r.Cells["colSell"].Value = item.SellingPrice;
-                            r.Cells["colRate"].Value = item.Rate;
-                            r.Cells["colCost"].Value = item.CostPrice;
-                            r.Cells["colQty"].Value = item.Quantity;
-                            r.Cells["colHsn"].Value = item.Hsn;
-                            r.Cells["colPack"].Value = item.Pack;
-                            r.Cells["colMkt"].Value = item.Mkt;
-                            r.Cells["colBonus"].Value = item.Bonus;
-                            r.Cells["colDisc"].Value = item.Disc;
-                            r.Cells["colCgst"].Value = item.Cgst;
-                            r.Cells["colSgst"].Value = item.Sgst;
-                            r.Cells["colIgst"].Value = item.Igst;
-                            r.Cells["colCategory"].Value = item.Category;
-                        }
-                        autoSaving = false;
-                        UpdateTotals();
-                    }
+                    await ProcessJsonImportAsync(dlg.JsonText);
                 }
             }
             catch (Exception ex)
             {
                 MessageBox.Show("AI Import failed: " + ex.Message);
+            }
+        }
+
+        private async Task ProcessJsonImportAsync(string rawJson)
+        {
+            if (string.IsNullOrWhiteSpace(rawJson)) return;
+
+            rawJson = rawJson.Trim();
+            if (rawJson.StartsWith("```json", StringComparison.OrdinalIgnoreCase)) rawJson = rawJson.Substring(7);
+            else if (rawJson.StartsWith("```")) rawJson = rawJson.Substring(3);
+            if (rawJson.EndsWith("```")) rawJson = rawJson.Substring(0, rawJson.Length - 3);
+            rawJson = rawJson.Trim();
+
+            JToken rootToken;
+            try
+            {
+                if (rawJson.StartsWith("[")) rootToken = JArray.Parse(rawJson);
+                else rootToken = JObject.Parse(rawJson);
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show("Invalid JSON format: " + ex.Message, "Import Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                return;
+            }
+
+            // Header
+            var supplierName = GetJsonProp(rootToken, "SUPPLIER", "supplier", "Vendor", "vendor", "SupplierName", "supplier_name", "Seller", "m/s")?.ToString();
+            if (!string.IsNullOrWhiteSpace(supplierName))
+            {
+                var sup = _allSuppliers.FirstOrDefault(s => string.Equals(s.Name, supplierName, StringComparison.OrdinalIgnoreCase));
+                if (sup != null) cmbSupplier.SelectedValue = sup.Id;
+                else cmbSupplier.Text = supplierName;
+            }
+
+            var billNo = GetJsonProp(rootToken, "BILL NO", "BILL_NO", "bill_no", "billNo", "INVOICE NO", "invoice_no", "invoiceNo", "BillNo", "InvoiceNumber", "inv_no")?.ToString();
+            if (!string.IsNullOrWhiteSpace(billNo)) txtInvoiceNo.Text = billNo;
+
+            var dateStr = GetJsonProp(rootToken, "DATE", "date", "bill_date", "invoice_date", "BillDate", "InvoiceDate")?.ToString();
+            if (!string.IsNullOrWhiteSpace(dateStr) && DateTime.TryParse(dateStr, out var dt))
+            {
+                dtPurchase.Value = dt;
+            }
+
+            // Products Collection & Matching
+            JArray? productsJson = GetJsonProp(rootToken, "products", "PRODUCTS", "items", "ITEMS", "ProductList", "data", "item_list", "product_list") as JArray;
+            if (productsJson == null && rootToken is JArray rootArr)
+            {
+                productsJson = rootArr;
+            }
+
+            if (productsJson == null || productsJson.Count == 0)
+            {
+                MessageBox.Show("No products/items array found in the invoice JSON.", "Import Warning", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+
+            var reviewItems = new List<AiPurchaseItem>();
+            using (var db = new AppDbContext())
+            {
+                var allProducts = db.Products.ToList();
+                var allDbProductNames = allProducts.Select(p => p.Name).ToList();
+                var inputNames = productsJson.Select(p => GetJsonProp(p, "NAME", "name", "product_name", "item_name", "Description", "description", "Item", "item")?.ToString() ?? "").Where(n => !string.IsNullOrEmpty(n)).Distinct().ToList();
+
+                var aiService = new AiAgentService();
+                var aiMatches = await aiService.PerformProductMatchingAsync(inputNames, allDbProductNames);
+
+                foreach (var p in productsJson)
+                {
+                    var inputName = GetJsonProp(p, "NAME", "name", "product_name", "item_name", "Description", "description", "Item", "item")?.ToString() ?? "";
+                    if (string.IsNullOrWhiteSpace(inputName)) continue;
+
+                    string? aiSuggestedName = null;
+                    if (aiMatches.TryGetValue(inputName, out var suggestion)) aiSuggestedName = suggestion;
+
+                    Product? matchedProd = null;
+                    if (!string.IsNullOrEmpty(aiSuggestedName))
+                    {
+                        matchedProd = allProducts.FirstOrDefault(x => string.Equals(x.Name, aiSuggestedName, StringComparison.OrdinalIgnoreCase));
+                    }
+
+                    if (matchedProd == null)
+                    {
+                        matchedProd = allProducts.FirstOrDefault(x => string.Equals(x.Name, inputName, StringComparison.OrdinalIgnoreCase));
+                    }
+
+                    if (matchedProd == null)
+                    {
+                        var words = inputName.Split(new[] { ' ', '-', '/', '.' }, StringSplitOptions.RemoveEmptyEntries)
+                                             .Where(w => w.Length > 2).ToList();
+
+                        if (words.Count > 0)
+                        {
+                            var firstWord = words[0];
+                            var candidates = allProducts.Where(pr => pr.Name.StartsWith(firstWord, StringComparison.OrdinalIgnoreCase)).ToList();
+
+                            if (candidates.Count == 1)
+                            {
+                                matchedProd = candidates[0];
+                            }
+                            else if (candidates.Count > 1)
+                            {
+                                matchedProd = candidates
+                                    .OrderByDescending(c => words.Count(w => c.Name.Contains(w, StringComparison.OrdinalIgnoreCase)))
+                                    .ThenBy(c => Math.Abs(c.Name.Length - inputName.Length))
+                                    .FirstOrDefault();
+                            }
+                        }
+                    }
+
+                    if (matchedProd == null)
+                    {
+                        matchedProd = allProducts.FirstOrDefault(x => x.Name.Contains(inputName, StringComparison.OrdinalIgnoreCase) || inputName.Contains(x.Name, StringComparison.OrdinalIgnoreCase));
+                    }
+
+                    var mrp = ParseDecimal(GetJsonProp(p, "MRP", "mrp"));
+                    var rate = ParseDecimal(GetJsonProp(p, "RATE", "rate", "unit_rate", "Price", "price"));
+                    var cost = ParseDecimal(GetJsonProp(p, "COST", "cost", "purchase_cost", "cost_price", "buying_price", "CP", "cp"));
+                    var sell = ParseDecimal(GetJsonProp(p, "SELL_PRICE", "sell_price", "selling_price", "SP", "sp"));
+                    var qty = ParseDecimal(GetJsonProp(p, "QTY", "qty", "quantity", "Quantity")) ?? 0;
+                    var disc = ParseDecimal(GetJsonProp(p, "DISC", "disc", "discount", "discount_percent", "Discount")) ?? 0;
+                    var cgst = ParseDecimal(GetJsonProp(p, "CGST", "cgst", "cgst_percent")) ?? 0;
+                    var sgst = ParseDecimal(GetJsonProp(p, "SGST", "sgst", "sgst_percent")) ?? 0;
+                    var igst = ParseDecimal(GetJsonProp(p, "IGST", "igst", "igst_percent", "tax", "GST", "gst")) ?? 0;
+
+                    var batch = GetJsonProp(p, "BATCH NO", "BATCH_NO", "batch_no", "batch", "batchNo", "BatchNo")?.ToString();
+                    var exp = GetJsonProp(p, "EXPIRY", "expiry", "exp_date", "exp", "ExpiryDate")?.ToString();
+                    var hsn = GetJsonProp(p, "HSN", "hsn", "hsn_code", "HsnCode", "HSN/SAC")?.ToString() ?? matchedProd?.Hsn;
+                    var pack = GetJsonProp(p, "PACK", "pack", "packing", "Packing")?.ToString();
+                    var mkt = GetJsonProp(p, "MKT", "mkt", "marketed_by", "MARKETED BY", "Company")?.ToString() ?? matchedProd?.MarketedBy;
+                    var bonus = GetJsonProp(p, "BONUS", "bonus", "scheme", "free_qty", "Free")?.ToString();
+                    var category = GetJsonProp(p, "CATEGORY", "category")?.ToString() ?? matchedProd?.Category;
+
+                    decimal totalTaxFactor = 1 + (cgst + sgst + igst) / 100m;
+                    decimal discFactor = 1 - disc / 100m;
+
+                    if (cost == null && rate != null)
+                    {
+                        cost = Math.Round(rate.Value * discFactor * totalTaxFactor, 2);
+                    }
+                    else if (rate == null && cost != null)
+                    {
+                        if (discFactor * totalTaxFactor > 0)
+                            rate = Math.Round(cost.Value / (discFactor * totalTaxFactor), 2);
+                    }
+
+                    reviewItems.Add(new AiPurchaseItem
+                    {
+                        Sku = string.Empty,
+                        ProductName = inputName,
+                        BatchNumber = batch,
+                        Expiry = exp,
+                        Mrp = mrp,
+                        SellingPrice = sell,
+                        CostPrice = cost,
+                        Quantity = qty,
+                        Rate = rate,
+                        Hsn = hsn,
+                        Pack = pack,
+                        Mkt = mkt,
+                        Bonus = bonus,
+                        Disc = disc,
+                        Cgst = cgst,
+                        Sgst = sgst,
+                        Igst = igst,
+                        Category = category
+                    });
+                }
+            }
+
+            var aiResp = new AiActionResponse
+            {
+                Action = "create_purchase",
+                Message = $"Imported {reviewItems.Count} items. All details have been extracted. Please verify.",
+                Data = JObject.FromObject(new AiPurchaseData { Items = reviewItems })
+            };
+
+            using (var reviewDlg = new AiActionReviewForm(aiResp))
+            {
+                if (reviewDlg.ShowDialog(this) != DialogResult.OK) return;
+
+                autoSaving = true;
+                gridItems.Rows.Clear();
+
+                var updatedData = reviewDlg.ResultResponse.Data.ToObject<AiPurchaseData>();
+                if (updatedData == null) return;
+
+                foreach (var item in updatedData.Items)
+                {
+                    int idx = gridItems.Rows.Add();
+                    var r = gridItems.Rows[idx];
+                    r.Cells["colSku"].Value = item.Sku;
+                    r.Cells["colName"].Value = item.ProductName;
+                    r.Cells["colBatch"].Value = item.BatchNumber;
+                    r.Cells["colExpiry"].Value = item.Expiry;
+                    r.Cells["colMrp"].Value = item.Mrp;
+                    r.Cells["colSell"].Value = item.SellingPrice;
+                    r.Cells["colRate"].Value = item.Rate;
+                    r.Cells["colCost"].Value = item.CostPrice;
+                    r.Cells["colQty"].Value = item.Quantity;
+                    r.Cells["colHsn"].Value = item.Hsn;
+                    r.Cells["colPack"].Value = item.Pack;
+                    r.Cells["colMkt"].Value = item.Mkt;
+                    r.Cells["colBonus"].Value = item.Bonus;
+                    r.Cells["colDisc"].Value = item.Disc;
+                    r.Cells["colCgst"].Value = item.Cgst;
+                    r.Cells["colSgst"].Value = item.Sgst;
+                    r.Cells["colIgst"].Value = item.Igst;
+                    r.Cells["colCategory"].Value = item.Category;
+                }
+                autoSaving = false;
+                UpdateTotals();
             }
         }
 
@@ -1794,7 +1840,6 @@ namespace BillingSuite.App.Forms
                 p.Notes = (p.Notes ?? "") + " [VOIDED AT " + DateTime.Now.ToString() + "]";
                 p.Total = 0;
                 p.Subtotal = 0;
-                // We keep the items for history but the purchase itself is effectively zeroed
                 db.SaveChanges();
                 MessageBox.Show("Purchase voided successfully.");
                 DialogResult = DialogResult.OK;
@@ -1805,42 +1850,82 @@ namespace BillingSuite.App.Forms
 
         private class AiImportDialog : Form
         {
-            private TextBox txtJson = new TextBox { Multiline = true, Dock = DockStyle.Fill, ScrollBars = ScrollBars.Vertical, Font = new Font("Consolas", 10) };
             private Button btnImport = new Button { Text = "Next: Review Items", DialogResult = DialogResult.OK, Width = 150 };
             private Button btnCancel = new Button { Text = "Cancel", DialogResult = DialogResult.Cancel, Width = 90 };
-            private Button btnUploadDoc = new Button { Text = "📁 Upload Invoice (PDF / Excel)", Width = 230, Height = 32 };
-            private Label lblStatus = new Label { AutoSize = true, Text = "Upload a PDF or Excel invoice to extract items automatically with AI, or paste JSON directly:", Location = new Point(10, 48), ForeColor = Color.FromArgb(70, 70, 70) };
+            private Button btnUploadDoc = new Button { Text = "📁 Upload Invoice (PDF / Excel)", Width = 260, Height = 42 };
+            private Button btnOpenGemBrowser = new Button { Text = "🌐 Gemini Gem Browser (AI Free)", Width = 260, Height = 42 };
+            private Label lblStatus = new Label { AutoSize = true, ForeColor = Color.FromArgb(70, 70, 70) };
 
-            public string JsonText => txtJson.Text;
+            // Internal extracted JSON passed back to the caller
+            public string JsonText { get; private set; } = string.Empty;
 
             public AiImportDialog()
             {
-                Text = "Smart Invoice Import — PDF / Excel / JSON"; 
-                Size = new Size(720, 540); 
+                Text = "Smart Invoice Import — PDF / Excel";
+                Size = new Size(600, 320);
+                MinimumSize = new Size(500, 300);
                 StartPosition = FormStartPosition.CenterParent;
+                Services.FormIconHelper.ApplyIcon(this);
 
-                Panel pnlTop = new Panel { Dock = DockStyle.Top, Height = 74, Padding = new Padding(10, 8, 10, 6), BackColor = Color.FromArgb(248, 249, 250) };
-                btnUploadDoc.Location = new Point(10, 10);
+                // ---- Title panel ----
+                var pnlTitle = new Panel { Dock = DockStyle.Top, Height = 48, BackColor = Color.FromArgb(13, 110, 253) };
+                var lblTitle = new Label
+                {
+                    Text = "📄  Import Purchase Invoice",
+                    Font = new Font("Segoe UI", 12F, FontStyle.Bold),
+                    ForeColor = Color.White,
+                    Dock = DockStyle.Fill,
+                    TextAlign = ContentAlignment.MiddleLeft,
+                    Padding = new Padding(14, 0, 0, 0)
+                };
+                pnlTitle.Controls.Add(lblTitle);
+
+                // ---- Buttons panel (centre) ----
+                var pnlCenter = new Panel { Dock = DockStyle.Fill, Padding = new Padding(30, 20, 30, 10) };
+
+                btnUploadDoc.Location = new Point(30, 20);
                 btnUploadDoc.BackColor = Color.FromArgb(13, 110, 253);
                 btnUploadDoc.ForeColor = Color.White;
-                btnUploadDoc.Font = new Font("Segoe UI", 9.5F, FontStyle.Bold);
+                btnUploadDoc.Font = new Font("Segoe UI", 10F, FontStyle.Bold);
                 btnUploadDoc.FlatStyle = FlatStyle.Flat;
                 btnUploadDoc.FlatAppearance.BorderSize = 0;
                 btnUploadDoc.Cursor = Cursors.Hand;
 
-                var lblHint = new Label 
-                { 
-                    Text = "Supported: PDF, XLSX, XLS. AI will parse Header, Items, Batch, Expiry, MRP, Cost & GST.", 
-                    Location = new Point(250, 16), 
-                    AutoSize = true, 
-                    ForeColor = Color.DimGray,
-                    Font = new Font("Segoe UI", 8.5F)
+                btnOpenGemBrowser.Location = new Point(310, 20);
+                btnOpenGemBrowser.BackColor = Color.FromArgb(16, 124, 65);
+                btnOpenGemBrowser.ForeColor = Color.White;
+                btnOpenGemBrowser.Font = new Font("Segoe UI", 10F, FontStyle.Bold);
+                btnOpenGemBrowser.FlatStyle = FlatStyle.Flat;
+                btnOpenGemBrowser.FlatAppearance.BorderSize = 0;
+                btnOpenGemBrowser.Cursor = Cursors.Hand;
+
+                lblStatus.Location = new Point(30, 80);
+                lblStatus.MaximumSize = new Size(530, 0);
+                lblStatus.Text = "Choose an option above: upload a PDF/Excel invoice for automatic AI extraction, or use Gemini Gem Browser for free AI extraction.";
+
+                pnlCenter.Controls.Add(btnUploadDoc);
+                pnlCenter.Controls.Add(btnOpenGemBrowser);
+                pnlCenter.Controls.Add(lblStatus);
+
+                // ---- Bottom bar ----
+                var pnlBottom = new Panel { Dock = DockStyle.Bottom, Height = 50, Padding = new Padding(10, 8, 10, 8) };
+                btnCancel.Dock = DockStyle.Right;
+                btnCancel.FlatStyle = FlatStyle.Flat;
+                var btnSettings = new Button { Text = "⚙ AI Settings", Dock = DockStyle.Left, Width = 110, FlatStyle = FlatStyle.Flat };
+                btnSettings.Click += (s, e) =>
+                {
+                    using var sDlg = new AiSettingsForm();
+                    sDlg.ShowDialog(this);
                 };
+                pnlBottom.Controls.Add(btnCancel);
+                pnlBottom.Controls.Add(btnSettings);
 
-                pnlTop.Controls.Add(btnUploadDoc);
-                pnlTop.Controls.Add(lblHint);
-                pnlTop.Controls.Add(lblStatus);
+                Controls.Add(pnlCenter);
+                Controls.Add(pnlTitle);
+                Controls.Add(pnlBottom);
+                CancelButton = btnCancel;
 
+                // ---- Wire Upload button ----
                 btnUploadDoc.Click += async (s, e) =>
                 {
                     using var ofd = new OpenFileDialog
@@ -1848,65 +1933,60 @@ namespace BillingSuite.App.Forms
                         Filter = "Invoice Documents (*.pdf;*.xlsx;*.xls)|*.pdf;*.xlsx;*.xls|PDF Files (*.pdf)|*.pdf|Excel Files (*.xlsx;*.xls)|*.xlsx;*.xls|All Files (*.*)|*.*",
                         Title = "Select Purchase Invoice Document to Extract"
                     };
-                    if (ofd.ShowDialog(this) == DialogResult.OK)
-                    {
-                        try
-                        {
-                            btnUploadDoc.Enabled = false;
-                            btnImport.Enabled = false;
-                            lblStatus.Text = $"Processing '{System.IO.Path.GetFileName(ofd.FileName)}' with AI engine... please wait...";
-                            lblStatus.ForeColor = Color.DarkBlue;
-                            Cursor = Cursors.WaitCursor;
-                            Application.DoEvents();
+                    if (ofd.ShowDialog(this) != DialogResult.OK) return;
 
-                            var aiProcessor = new AiDocumentProcessor(new AiAgentService());
-                            var extractedJson = await aiProcessor.ProcessInvoiceDocumentAsync(ofd.FileName);
-                            txtJson.Text = extractedJson;
-                            lblStatus.Text = "Invoice data successfully extracted! Verify or click 'Next: Review Items' to proceed.";
-                            lblStatus.ForeColor = Color.ForestGreen;
-                        }
-                        catch (Exception ex)
+                    try
+                    {
+                        btnUploadDoc.Enabled = false;
+                        btnOpenGemBrowser.Enabled = false;
+                        lblStatus.Text = $"⏳  Processing '{System.IO.Path.GetFileName(ofd.FileName)}'… please wait…";
+                        lblStatus.ForeColor = Color.DarkBlue;
+                        Cursor = Cursors.WaitCursor;
+                        Application.DoEvents();
+
+                        var aiProcessor = new AiDocumentProcessor(new AiAgentService());
+                        var extractedJson = await aiProcessor.ProcessInvoiceDocumentAsync(ofd.FileName);
+
+                        if (string.IsNullOrWhiteSpace(extractedJson))
                         {
-                            lblStatus.Text = $"Error: {ex.Message}";
+                            lblStatus.Text = "Could not extract data from the document. Please try Gemini Gem Browser.";
                             lblStatus.ForeColor = Color.Firebrick;
-                            MessageBox.Show($"Failed to process document: {ex.Message}", "AI Extraction Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                            return;
                         }
-                        finally
-                        {
-                            btnUploadDoc.Enabled = true;
-                            btnImport.Enabled = true;
-                            Cursor = Cursors.Default;
-                        }
+
+                        JsonText = extractedJson;
+                        lblStatus.Text = "✅  Invoice extracted successfully!";
+                        lblStatus.ForeColor = Color.ForestGreen;
+                        Application.DoEvents();
+                        System.Threading.Thread.Sleep(400);
+                        DialogResult = DialogResult.OK;
+                        Close();
+                    }
+                    catch (Exception ex)
+                    {
+                        lblStatus.Text = $"Error: {ex.Message}";
+                        lblStatus.ForeColor = Color.Firebrick;
+                        MessageBox.Show($"Failed to process document:\n{ex.Message}", "Extraction Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                    }
+                    finally
+                    {
+                        btnUploadDoc.Enabled = true;
+                        btnOpenGemBrowser.Enabled = true;
+                        Cursor = Cursors.Default;
                     }
                 };
 
-                Panel pnlBottom = new Panel { Dock = DockStyle.Bottom, Height = 52, Padding = new Padding(10, 8, 10, 8) };
-                btnImport.Dock = DockStyle.Right; 
-                btnCancel.Dock = DockStyle.Right;
-                var btnSettings = new Button { Text = "AI Settings", Dock = DockStyle.Left, Width = 110 };
-                
-                btnImport.BackColor = Color.FromArgb(0, 122, 204); 
-                btnImport.ForeColor = Color.White; 
-                btnImport.FlatStyle = FlatStyle.Flat;
-                btnImport.Font = new Font("Segoe UI", 9F, FontStyle.Bold);
-                btnCancel.FlatStyle = FlatStyle.Flat;
-                btnSettings.FlatStyle = FlatStyle.Flat;
-
-                btnSettings.Click += (s, e) => {
-                    using var sDlg = new AiSettingsForm();
-                    sDlg.ShowDialog(this);
+                // ---- Wire Gemini Gem Browser button ----
+                btnOpenGemBrowser.Click += (s, e) =>
+                {
+                    using var gemForm = new GeminiGemBrowserForm();
+                    if (gemForm.ShowDialog(this) == DialogResult.OK && !string.IsNullOrWhiteSpace(gemForm.ExtractedJson))
+                    {
+                        JsonText = gemForm.ExtractedJson;
+                        DialogResult = DialogResult.OK;
+                        Close();
+                    }
                 };
-
-                pnlBottom.Controls.Add(btnImport);
-                pnlBottom.Controls.Add(new Label { Dock = DockStyle.Right, Width = 10 });
-                pnlBottom.Controls.Add(btnCancel);
-                pnlBottom.Controls.Add(btnSettings);
-
-                Controls.Add(txtJson); 
-                Controls.Add(pnlTop);
-                Controls.Add(pnlBottom);
-                AcceptButton = btnImport; 
-                CancelButton = btnCancel;
             }
         }
     }

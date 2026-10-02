@@ -20,6 +20,7 @@ namespace BillingSuite.App.Forms
 
         public PurchasePreviewForm(Purchase purchase, string htmlContent, string template = "Classic")
         {
+            Services.FormIconHelper.ApplyIcon(this);
             this.purchase = purchase;
             this.htmlContent = htmlContent;
             this.template = template;

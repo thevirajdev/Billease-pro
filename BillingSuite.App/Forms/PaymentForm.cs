@@ -18,6 +18,7 @@ namespace BillingSuite.App.Forms
 
         public PaymentForm(decimal suggestedAmount)
         {
+            Services.FormIconHelper.ApplyIcon(this);
             Text = "Add Payment";
             StartPosition = FormStartPosition.CenterParent;
             Size = new Size(420, 300);

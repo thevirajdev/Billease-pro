@@ -19,6 +19,7 @@ namespace BillingSuite.App.Forms
         private readonly Button btnDelete = new Button();
         public SuppliersForm()
         {
+            Services.FormIconHelper.ApplyIcon(this);
             Text = "Suppliers"; StartPosition = FormStartPosition.CenterParent; Size = new Size(1000, 600);
             var top = new Panel { Dock = DockStyle.Top, Height = 42 };
             txtSearch.PlaceholderText = "Search name/email/phone/city/state"; txtSearch.Width = 320; txtSearch.Location = new Point(8, 9);

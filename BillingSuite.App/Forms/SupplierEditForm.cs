@@ -25,6 +25,7 @@ namespace BillingSuite.App.Forms
         {
             Model = supplier ?? new Supplier();
             InitializeComponent();
+            Services.FormIconHelper.ApplyIcon(this);
             LoadData();
         }
 

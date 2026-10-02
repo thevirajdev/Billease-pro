@@ -14,6 +14,7 @@ namespace BillingSuite.App.Forms
 
         public ProductListForm()
         {
+            Services.FormIconHelper.ApplyIcon(this);
             Text = "Products";
             StartPosition = FormStartPosition.CenterParent;
             Size = new Size(1000, 600);

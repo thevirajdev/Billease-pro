@@ -6,8 +6,8 @@ namespace BillingSuite.App.Models
     {
         public int Id { get; set; }
         public int? OwnerUserId { get; set; }
-        public string Barcode { get; set; } = string.Empty; // acts as SKU
-        public string Name { get; set; } = string.Empty;
+        public string? Barcode { get; set; } = string.Empty; // acts as SKU
+        public string? Name { get; set; } = string.Empty;
         public string? Hsn { get; set; }
         public string? Description { get; set; }
         public decimal Price { get; set; }

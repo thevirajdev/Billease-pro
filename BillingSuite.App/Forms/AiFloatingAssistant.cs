@@ -54,6 +54,7 @@ namespace BillingSuite.App.Forms
             var wa = Screen.PrimaryScreen?.WorkingArea ?? new Rectangle(0, 0, 1024, 768);
             Location = new Point(wa.Right - 80, wa.Bottom - 80);
 
+            Services.FormIconHelper.ApplyIcon(this);
             InitComponents();
             ApplyBubbleRegion();
         }

@@ -31,15 +31,17 @@ if not exist "%ISCC_PATH%" set "ISCC_PATH=%LOCALAPPDATA%\Programs\Inno Setup 6\i
 if not exist "%ISCC_PATH%" set "ISCC_PATH=C:\Program Files (x86)\Inno Setup 6\iscc.exe"
 if not exist "%ISCC_PATH%" set "ISCC_PATH=C:\Program Files\Inno Setup 6\iscc.exe"
 
-"%ISCC_PATH%" installer.iss
+"%ISCC_PATH%" /O"%TEMP%" installer.iss
 if %ERRORLEVEL% NEQ 0 (
     echo.
     echo [WARNING] Inno Setup compiler exited with an error. Check logs above.
 ) else (
+    if not exist "installer_output" mkdir "installer_output"
+    move /y "%TEMP%\BilleasePro_Setup.exe" "installer_output\BilleasePro_Setup.exe" >nul
     echo.
     echo ========================================================
     echo   Setup Installer built successfully!
-    echo   Location: BillingSuite.App\bin\Release\net8.0-windows\win-x64\publish\BilleasePro_Setup.exe
+    echo   Location: installer_output\BilleasePro_Setup.exe
     echo ========================================================
 )
 

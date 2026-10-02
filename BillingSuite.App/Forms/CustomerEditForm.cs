@@ -26,6 +26,7 @@ namespace BillingSuite.App.Forms
 
         public CustomerEditForm(Customer? model = null)
         {
+            Services.FormIconHelper.ApplyIcon(this);
             Text = model == null ? "Add Customer" : "Edit Customer";
             StartPosition = FormStartPosition.CenterParent;
             Size = new Size(620, 520);

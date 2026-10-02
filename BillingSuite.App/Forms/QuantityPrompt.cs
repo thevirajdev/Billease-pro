@@ -14,6 +14,7 @@ namespace BillingSuite.App.Forms
 
         public QuantityPrompt(decimal defaultQty = 1m)
         {
+            Services.FormIconHelper.ApplyIcon(this);
             Text = "Quantity";
             StartPosition = FormStartPosition.CenterParent;
             Size = new Size(260, 140);

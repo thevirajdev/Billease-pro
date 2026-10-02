@@ -37,6 +37,7 @@ namespace BillingSuite.App.Forms
 
         public ProductEditForm(Product? model = null, ProductBatch? batch = null)
         {
+            Services.FormIconHelper.ApplyIcon(this);
             Text = model == null ? "Add Product" : "Edit Product";
             StartPosition = FormStartPosition.CenterParent;
             Size = new Size(950, 800);

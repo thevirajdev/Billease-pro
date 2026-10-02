@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Drawing;
 using System.Linq;
 using System.Windows.Forms;
+using BillingSuite.App.Data;
 using BillingSuite.App.Models;
 using BillingSuite.App.Services;
 
@@ -34,6 +35,7 @@ namespace BillingSuite.App.Forms
         public SettingsForm()
         {
             InitializeComponent();
+            Services.FormIconHelper.ApplyIcon(this);
             BuildTabs();
         }
 
@@ -91,7 +93,24 @@ namespace BillingSuite.App.Forms
                 Size = new Size(100, 30),
                 Anchor = AnchorStyles.Bottom | AnchorStyles.Right
             };
-            _btnCancel.Click += (s, e) => Close();
+            _btnCancel.Click += (s, e) =>
+            {
+                if (TopLevel)
+                {
+                    Close();
+                }
+                else
+                {
+                    if (TopLevelControl is Form1 topForm)
+                    {
+                        topForm.SelectDashboardTab();
+                    }
+                    else if (ParentForm is Form1 pForm)
+                    {
+                        pForm.SelectDashboardTab();
+                    }
+                }
+            };
 
             Controls.AddRange(new Control[] { _tabs, _lblStatus, _btnResetTab, _btnSave, _btnCancel });
             AcceptButton = _btnSave;
@@ -107,6 +126,7 @@ namespace BillingSuite.App.Forms
             var header = new Label
             {
                 Text = title,
+                UseMnemonic = false,
                 Font = new Font("Segoe UI", 12F, FontStyle.Bold),
                 ForeColor = Accent,
                 Location = new Point(16, 12),
@@ -119,6 +139,7 @@ namespace BillingSuite.App.Forms
                 page.Controls.Add(new Label
                 {
                     Text = description,
+                    UseMnemonic = false,
                     ForeColor = Color.DimGray,
                     Location = new Point(16, 40),
                     MaximumSize = new Size(830, 0),
@@ -140,6 +161,7 @@ namespace BillingSuite.App.Forms
             page.Controls.Add(new Label
             {
                 Text = label,
+                UseMnemonic = false,
                 Location = new Point(LabelX, _y + 4),
                 Size = new Size(FieldX - LabelX - 10, 20),
                 TextAlign = ContentAlignment.MiddleLeft
@@ -154,6 +176,7 @@ namespace BillingSuite.App.Forms
                 page.Controls.Add(new Label
                 {
                     Text = hint,
+                    UseMnemonic = false,
                     ForeColor = Color.Gray,
                     Location = new Point(FieldX, _y - 6),
                     MaximumSize = new Size(FieldW + 120, 0),
@@ -169,6 +192,7 @@ namespace BillingSuite.App.Forms
             page.Controls.Add(new Label
             {
                 Text = text,
+                UseMnemonic = false,
                 Font = HeaderFont,
                 ForeColor = Color.FromArgb(64, 64, 64),
                 Location = new Point(LabelX, _y),
@@ -196,15 +220,17 @@ namespace BillingSuite.App.Forms
                 Minimum = min,
                 Maximum = max,
                 DecimalPlaces = decimals,
-                Value = Math.Clamp(value, min, max)
+                Value = Math.Clamp(decimals == 0 ? Math.Round(value, 0) : value, min, max)
             };
             Row(page, label, num, hint);
-            _readers[key] = () => num.Value.ToString(System.Globalization.CultureInfo.InvariantCulture);
+            _readers[key] = () => decimals == 0
+                ? Convert.ToInt64(Math.Round(num.Value)).ToString(System.Globalization.CultureInfo.InvariantCulture)
+                : Math.Round(num.Value, decimals).ToString(System.Globalization.CultureInfo.InvariantCulture);
             _writers[key] = v =>
             {
                 if (decimal.TryParse(v, System.Globalization.NumberStyles.Number,
                         System.Globalization.CultureInfo.InvariantCulture, out var d))
-                    num.Value = Math.Clamp(d, min, max);
+                    num.Value = Math.Clamp(decimals == 0 ? Math.Round(d, 0) : d, min, max);
             };
             _tabKeys.Add(key);
             return num;
@@ -215,6 +241,7 @@ namespace BillingSuite.App.Forms
             var chk = new CheckBox
             {
                 Text = label,
+                UseMnemonic = false,
                 Checked = AppSettingsService.GetBool(key, true),
                 Location = new Point(LabelX, _y),
                 Width = FieldW + 200,
@@ -228,6 +255,7 @@ namespace BillingSuite.App.Forms
                 page.Controls.Add(new Label
                 {
                     Text = hint,
+                    UseMnemonic = false,
                     ForeColor = Color.Gray,
                     Location = new Point(LabelX + 20, _y - 4),
                     MaximumSize = new Size(FieldW + 260, 0),
@@ -259,6 +287,7 @@ namespace BillingSuite.App.Forms
 
         private void BuildTabs()
         {
+            _tabs.TabPages.Add(BuildAccountSecurityTab());
             _tabs.TabPages.Add(BuildCompanyTab());
             _tabs.TabPages.Add(BuildInvoiceContentTab());
             _tabs.TabPages.Add(BuildInvoiceLayoutTab());
@@ -270,6 +299,188 @@ namespace BillingSuite.App.Forms
             _tabs.TabPages.Add(BuildStorageTab());
             _tabs.TabPages.Add(BuildSyncTab());
             _tabs.TabPages.Add(BuildAboutTab());
+        }
+
+        private TabPage BuildAccountSecurityTab()
+        {
+            var page = NewPage("Account & Security",
+                "Manage your active account profile, update your password, or log out of this device.");
+            var tp = new TabPage("Account & Security") { BackColor = Color.White };
+            tp.Controls.Add(page); page.Dock = DockStyle.Fill;
+
+            _y = 76;
+            var u = AuthService.CurrentUser;
+
+            SectionHeader(page, "Signed-In User Account");
+
+            void AccountInfo(string label, string val)
+            {
+                page.Controls.Add(new Label { Text = label, Location = new Point(LabelX, _y + 4), Size = new Size(FieldX - LabelX - 10, 20), TextAlign = ContentAlignment.MiddleLeft });
+                page.Controls.Add(new Label { Text = val, Location = new Point(FieldX, _y + 4), Size = new Size(FieldW, 20), Font = new Font("Segoe UI", 9.5F, FontStyle.Bold), ForeColor = Color.FromArgb(30, 41, 59) });
+                _y += 30;
+            }
+
+            AccountInfo("Email Address", u?.Email ?? "Not signed in");
+            AccountInfo("Full Name", u?.FullName ?? "N/A");
+            AccountInfo("Account Role", u?.Role ?? "Owner");
+            AccountInfo("Company Name", u?.CompanyName ?? AppSettingsService.CompanyName ?? "N/A");
+
+            SectionHeader(page, "Change Password");
+
+            var txtCurrent = new TextBox { PasswordChar = '*', Width = FieldW };
+            var txtNew = new TextBox { PasswordChar = '*', Width = FieldW };
+            var txtConfirm = new TextBox { PasswordChar = '*', Width = FieldW };
+
+            Row(page, "Current Password", txtCurrent);
+            Row(page, "New Password", txtNew, "Minimum 6 characters.");
+            Row(page, "Confirm New Password", txtConfirm);
+
+            var btnChangePass = new Button
+            {
+                Text = "🔑 Update Password",
+                Location = new Point(FieldX, _y),
+                Size = new Size(180, 32),
+                BackColor = Accent,
+                ForeColor = Color.White,
+                FlatStyle = FlatStyle.Flat,
+                Font = new Font("Segoe UI", 9F, FontStyle.Bold)
+            };
+
+            var lblPassStatus = new Label
+            {
+                Location = new Point(FieldX + 190, _y + 6),
+                AutoSize = true,
+                ForeColor = Color.Firebrick
+            };
+
+            btnChangePass.Click += (s, e) =>
+            {
+                lblPassStatus.Text = string.Empty;
+                if (u == null)
+                {
+                    lblPassStatus.ForeColor = Color.Firebrick;
+                    lblPassStatus.Text = "No active account signed in.";
+                    return;
+                }
+                var cur = txtCurrent.Text;
+                var n1 = txtNew.Text;
+                var n2 = txtConfirm.Text;
+
+                if (string.IsNullOrWhiteSpace(cur))
+                {
+                    lblPassStatus.ForeColor = Color.Firebrick;
+                    lblPassStatus.Text = "Enter current password.";
+                    return;
+                }
+                if (string.IsNullOrWhiteSpace(n1) || n1.Length < 6)
+                {
+                    lblPassStatus.ForeColor = Color.Firebrick;
+                    lblPassStatus.Text = "New password must be at least 6 chars.";
+                    return;
+                }
+                if (n1 != n2)
+                {
+                    lblPassStatus.ForeColor = Color.Firebrick;
+                    lblPassStatus.Text = "New passwords do not match.";
+                    return;
+                }
+
+                var (ok, err) = AuthService.ChangePassword(u.Id, cur, n1);
+                if (ok)
+                {
+                    lblPassStatus.ForeColor = Color.SeaGreen;
+                    lblPassStatus.Text = "Password updated successfully!";
+                    txtCurrent.Clear();
+                    txtNew.Clear();
+                    txtConfirm.Clear();
+                }
+                else
+                {
+                    lblPassStatus.ForeColor = Color.Firebrick;
+                    lblPassStatus.Text = err;
+                }
+            };
+
+            page.Controls.Add(btnChangePass);
+            page.Controls.Add(lblPassStatus);
+            _y += 44;
+
+            SectionHeader(page, "Session & Switch Account");
+
+            var btnLogout = new Button
+            {
+                Text = "🚪 Log Out Account",
+                Location = new Point(LabelX, _y),
+                Size = new Size(160, 34),
+                BackColor = Color.FromArgb(239, 68, 68),
+                ForeColor = Color.White,
+                FlatStyle = FlatStyle.Flat,
+                Font = new Font("Segoe UI", 9F, FontStyle.Bold)
+            };
+
+            var btnSwitch = new Button
+            {
+                Text = "🔄 Switch Account",
+                Location = new Point(LabelX + 170, _y),
+                Size = new Size(160, 34),
+                BackColor = Color.FromArgb(241, 245, 249),
+                ForeColor = Color.FromArgb(30, 41, 59),
+                FlatStyle = FlatStyle.Flat,
+                Font = new Font("Segoe UI", 9F, FontStyle.Bold)
+            };
+
+            btnLogout.Click += (s, e) => PerformSwitchAccount();
+            btnSwitch.Click += (s, e) => PerformSwitchAccount();
+
+            page.Controls.Add(btnLogout);
+            page.Controls.Add(btnSwitch);
+
+            return tp;
+        }
+
+        private void PerformSwitchAccount()
+        {
+            if (MessageBox.Show("Are you sure you want to log out or switch account?", "Switch Account", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes)
+                return;
+
+            AuthService.SignOut();
+
+            var mainForm = Application.OpenForms.OfType<Form1>().FirstOrDefault() ?? (Owner as Form1) ?? (TopLevelControl as Form1) ?? (ParentForm as Form1);
+
+            if (TopLevel)
+            {
+                this.Hide();
+            }
+            mainForm?.Hide();
+
+            using var login = new LoginForm(firstRun: false);
+            if (login.ShowDialog() == DialogResult.OK)
+            {
+                AppSettingsService.Invalidate();
+                mainForm?.OnUserSessionChanged();
+
+                if (TopLevel)
+                {
+                    this.DialogResult = DialogResult.OK;
+                    this.Close();
+                    mainForm?.Show();
+                    mainForm?.BringToFront();
+                }
+                else
+                {
+                    _readers.Clear();
+                    _writers.Clear();
+                    _tabKeys.Clear();
+                    _tabs.TabPages.Clear();
+                    BuildTabs();
+                    mainForm?.Show();
+                    mainForm?.BringToFront();
+                }
+            }
+            else
+            {
+                Application.Exit();
+            }
         }
 
         private TabPage BuildCompanyTab()
@@ -541,6 +752,7 @@ namespace BillingSuite.App.Forms
             var lblAccountInfo = new Label
             {
                 Text = u != null ? $"Logged in as: {u.FullName} ({u.Email})" : "Logged in as: Offline User Account",
+                UseMnemonic = false,
                 Font = new Font("Segoe UI", 9.5F, FontStyle.Bold),
                 ForeColor = Color.DarkSlateBlue,
                 Location = new Point(20, _y),
@@ -553,69 +765,204 @@ namespace BillingSuite.App.Forms
                 Size = new Size(220, 30),
                 FlatStyle = FlatStyle.Flat
             };
-            btnLogout.Click += (s, e) =>
-            {
-                if (MessageBox.Show("Are you sure you want to log out of this account?", "Log Out", MessageBoxButtons.YesNo, MessageBoxIcon.Question) == DialogResult.Yes)
-                {
-                    AuthService.SignOut();
-                    var topForm = FindForm();
-                    if (topForm != null)
-                    {
-                        topForm.Hide();
-                        using var login = new LoginForm(firstRun: false);
-                        if (login.ShowDialog() == DialogResult.OK)
-                        {
-                            AppSettingsService.Invalidate();
-                            topForm.Show();
-                        }
-                        else
-                        {
-                            Application.Exit();
-                        }
-                    }
-                }
-            };
+            btnLogout.Click += (s, e) => PerformSwitchAccount();
             page.Controls.Add(lblAccountInfo);
             page.Controls.Add(btnLogout);
             _y += 36;
 
-            BoolRow(page, AppSettingKeys.SyncEnabled, "Enable automatic cloud sync & backup",
-                "Keep your local records backed up to the cloud in the background.");
-            NumberRow(page, AppSettingKeys.SyncIntervalMinutes, "Sync frequency (minutes)", 1, 1440, 15,
+            // 24/7 Auto Background Info & Enable/Disable Toggle
+            var pnlAutoSyncInfo = new Panel
+            {
+                Location = new Point(20, _y),
+                Size = new Size(590, 56),
+                BackColor = AppSettingsService.SyncEnabled ? Color.FromArgb(240, 253, 244) : Color.FromArgb(254, 243, 199),
+                BorderStyle = BorderStyle.FixedSingle
+            };
+            var chkEnableSync = new CheckBox
+            {
+                Text = " Enable Automatic 24/7 Background Cloud Sync & Backup on this device",
+                UseMnemonic = false,
+                Font = new Font("Segoe UI", 9.5F, FontStyle.Bold),
+                ForeColor = AppSettingsService.SyncEnabled ? Color.FromArgb(22, 101, 52) : Color.FromArgb(146, 64, 14),
+                Location = new Point(12, 8),
+                AutoSize = true,
+                Checked = AppSettingsService.SyncEnabled
+            };
+            var lblSyncSubtext = new Label
+            {
+                Text = AppSettingsService.SyncEnabled
+                    ? "⚡ ACTIVE: Local changes are automatically backed up to cloud."
+                    : "⏸️ DISABLED: Automatic backup is OFF on this device. (Ideal for view-only/secondary devices)",
+                UseMnemonic = false,
+                Font = new Font("Segoe UI", 8.5F, FontStyle.Italic),
+                ForeColor = AppSettingsService.SyncEnabled ? Color.FromArgb(22, 101, 52) : Color.FromArgb(180, 83, 9),
+                Location = new Point(32, 32),
+                AutoSize = true
+            };
+            chkEnableSync.CheckedChanged += (s, e) =>
+            {
+                var isChecked = chkEnableSync.Checked;
+                AppSettingsService.Set(AppSettingKeys.SyncEnabled, isChecked ? "true" : "false");
+                AppSettingsService.Invalidate();
+                pnlAutoSyncInfo.BackColor = isChecked ? Color.FromArgb(240, 253, 244) : Color.FromArgb(254, 243, 199);
+                chkEnableSync.ForeColor = isChecked ? Color.FromArgb(22, 101, 52) : Color.FromArgb(146, 64, 14);
+                lblSyncSubtext.ForeColor = isChecked ? Color.FromArgb(22, 101, 52) : Color.FromArgb(180, 83, 9);
+                lblSyncSubtext.Text = isChecked
+                    ? "⚡ ACTIVE: Local changes are automatically backed up to cloud."
+                    : "⏸️ DISABLED: Automatic backup is OFF on this device. (Ideal for view-only/secondary devices)";
+            };
+
+            pnlAutoSyncInfo.Controls.Add(chkEnableSync);
+            pnlAutoSyncInfo.Controls.Add(lblSyncSubtext);
+            page.Controls.Add(pnlAutoSyncInfo);
+            _y += 66;
+
+            NumberRow(page, AppSettingKeys.SyncIntervalMinutes, "Sync frequency (minutes)", 1, 1440, 0,
                 "How often the app checks for changes and syncs with the cloud when online.");
 
             SectionHeader(page, "Cloud Sync Actions");
 
-            // Buttons: Sync Now, Restore, and 24/7 Background Task
+            // Buttons: Sync Now, Restore My Data
             var btnSyncNow = new Button
             {
                 Text = "🔄 Sync Now",
                 Location = new Point(20, _y),
-                Size = new Size(140, 34),
+                Size = new Size(160, 34),
                 BackColor = Color.FromArgb(0, 122, 204),
                 ForeColor = Color.White,
-                FlatStyle = FlatStyle.Flat
+                FlatStyle = FlatStyle.Flat,
+                Font = new Font("Segoe UI", 9F, FontStyle.Bold)
             };
             var btnRestore = new Button
             {
                 Text = "⬇ Restore My Data from Cloud",
-                Location = new Point(170, _y),
-                Size = new Size(210, 34),
-                FlatStyle = FlatStyle.Flat
+                Location = new Point(190, _y),
+                Size = new Size(230, 34),
+                FlatStyle = FlatStyle.Flat,
+                Font = new Font("Segoe UI", 9F, FontStyle.Bold)
             };
-            var btnScheduleTask = new Button
+
+            page.Controls.Add(btnSyncNow);
+            page.Controls.Add(btnRestore);
+            _y += 46;
+
+            SectionHeader(page, "Live Status & Progress");
+
+            // Live status display
+            var netAvailable = SyncService.IsNetworkAvailable();
+            var lblNet = new Label
             {
-                Text = "⚡ Enable 24/7 Background Sync",
-                Location = new Point(390, _y),
-                Size = new Size(220, 34),
-                FlatStyle = FlatStyle.Flat
+                Text = netAvailable ? "🟢 Network: Online (Connected to internet)" : "🟠 Network: Offline (Local database active, changes will sync when reconnected)",
+                UseMnemonic = false,
+                ForeColor = netAvailable ? Color.SeaGreen : Color.DarkOrange,
+                Location = new Point(20, _y),
+                AutoSize = true,
+                Font = new Font("Segoe UI", 9F, FontStyle.Bold)
             };
+            page.Controls.Add(lblNet);
+            _y += 24;
+
+            var isConfigured = CloudDbConfig.IsConfigured || !string.IsNullOrWhiteSpace(AppSettingsService.SyncConnectionString);
+            var lblBackend = new Label
+            {
+                Text = isConfigured ? "🟢 Cloud Backend: Configured & Ready" : "⚪ Cloud Backend: Pending Configuration",
+                UseMnemonic = false,
+                ForeColor = isConfigured ? Color.SeaGreen : Color.DimGray,
+                Location = new Point(20, _y),
+                AutoSize = true
+            };
+            page.Controls.Add(lblBackend);
+            _y += 22;
+
+            var lblLast = new Label
+            {
+                Text = "Last successful cloud backup: Loading...",
+                UseMnemonic = false,
+                ForeColor = Color.FromArgb(30, 41, 59),
+                Location = new Point(20, _y),
+                AutoSize = true,
+                Font = new Font("Segoe UI", 9F, FontStyle.Bold)
+            };
+            page.Controls.Add(lblLast);
+            _y += 24;
+
+            var lblSyncStatus = new Label
+            {
+                Text = $"Current sync status: {SyncService.LastStatus}",
+                UseMnemonic = false,
+                ForeColor = Color.DarkSlateBlue,
+                Location = new Point(20, _y),
+                AutoSize = true
+            };
+            page.Controls.Add(lblSyncStatus);
+            _y += 22;
+
+            var pbSyncProgress = new ProgressBar
+            {
+                Location = new Point(20, _y),
+                Size = new Size(500, 18),
+                Minimum = 0,
+                Maximum = 100,
+                Value = Math.Clamp(SyncService.CurrentProgressPercent, 0, 100)
+            };
+            page.Controls.Add(pbSyncProgress);
+
+            Action updateSyncUI = () =>
+            {
+                if (Disposing || IsDisposed) return;
+                if (InvokeRequired)
+                {
+                    try { BeginInvoke(new Action(() => {
+                        var lastUtc = AppSettingsService.LastSyncAtUtc;
+                        if (string.IsNullOrWhiteSpace(lastUtc))
+                        {
+                            lblLast.Text = "Last successful cloud backup: Never";
+                        }
+                        else if (DateTime.TryParse(lastUtc, out var dt))
+                        {
+                            lblLast.Text = $"Last successful cloud backup: {dt.ToLocalTime():dd-MMM-yyyy hh:mm tt}";
+                        }
+                        else
+                        {
+                            lblLast.Text = $"Last successful cloud backup: {lastUtc}";
+                        }
+
+                        lblSyncStatus.Text = $"Current sync status: {SyncService.LastStatus}";
+                        pbSyncProgress.Value = Math.Clamp(SyncService.CurrentProgressPercent, 0, 100);
+                    })); } catch { }
+                    return;
+                }
+
+                var lastUtcVal = AppSettingsService.LastSyncAtUtc;
+                if (string.IsNullOrWhiteSpace(lastUtcVal))
+                {
+                    lblLast.Text = "Last successful cloud backup: Never";
+                }
+                else if (DateTime.TryParse(lastUtcVal, out var dtVal))
+                {
+                    lblLast.Text = $"Last successful cloud backup: {dtVal.ToLocalTime():dd-MMM-yyyy hh:mm tt}";
+                }
+                else
+                {
+                    lblLast.Text = $"Last successful cloud backup: {lastUtcVal}";
+                }
+
+                lblSyncStatus.Text = $"Current sync status: {SyncService.LastStatus}";
+                pbSyncProgress.Value = Math.Clamp(SyncService.CurrentProgressPercent, 0, 100);
+            };
+
+            // Initial trigger
+            updateSyncUI();
+
+            // Subscribe to live status changes
+            SyncService.StatusChanged += _ => updateSyncUI();
 
             btnSyncNow.Click += async (s, e) =>
             {
                 btnSyncNow.Enabled = false;
                 var (ok, msg) = await SyncService.SyncNowAsync();
                 btnSyncNow.Enabled = true;
+                updateSyncUI();
                 MessageBox.Show(msg, "Cloud Sync", MessageBoxButtons.OK, ok ? MessageBoxIcon.Information : MessageBoxIcon.Warning);
             };
 
@@ -636,67 +983,25 @@ namespace BillingSuite.App.Forms
                     return;
 
                 btnRestore.Enabled = false;
-                var (ok, msg) = await OnlineDatabaseService.PullFromCloudAsync(connStr, AuthService.CurrentUser?.Id);
+                var (ok, msg) = await OnlineDatabaseService.PullFromCloudAsync(connStr, AuthService.CurrentUser?.Id, (status, pct) =>
+                {
+                    if (!IsDisposed && InvokeRequired)
+                    {
+                        try { BeginInvoke(new Action(() => {
+                            lblSyncStatus.Text = $"Current restore status: {status}";
+                            pbSyncProgress.Value = Math.Clamp(pct, 0, 100);
+                        })); } catch { }
+                    }
+                });
                 btnRestore.Enabled = true;
+                updateSyncUI();
+                if (ok)
+                {
+                    var mainForm = Application.OpenForms.OfType<Form1>().FirstOrDefault() ?? (Owner as Form1) ?? (TopLevelControl as Form1);
+                    mainForm?.OnUserSessionChanged();
+                }
                 MessageBox.Show(msg, "Cloud Restore", MessageBoxButtons.OK, ok ? MessageBoxIcon.Information : MessageBoxIcon.Warning);
             };
-
-            btnScheduleTask.Click += (s, e) =>
-            {
-                var (ok, msg) = SyncService.RegisterWindowsScheduledTask();
-                MessageBox.Show(msg, "24/7 Background Sync", MessageBoxButtons.OK, ok ? MessageBoxIcon.Information : MessageBoxIcon.Warning);
-            };
-
-            page.Controls.Add(btnSyncNow);
-            page.Controls.Add(btnRestore);
-            page.Controls.Add(btnScheduleTask);
-            _y += 46;
-
-            SectionHeader(page, "Live Status");
-
-            // Live status display
-            var netAvailable = SyncService.IsNetworkAvailable();
-            var lblNet = new Label
-            {
-                Text = netAvailable ? "🟢 Network: Online (Connected to internet)" : "🟠 Network: Offline (Local database active, changes will sync when reconnected)",
-                ForeColor = netAvailable ? Color.SeaGreen : Color.DarkOrange,
-                Location = new Point(20, _y),
-                AutoSize = true,
-                Font = new Font("Segoe UI", 9F, FontStyle.Bold)
-            };
-            page.Controls.Add(lblNet);
-            _y += 24;
-
-            var isConfigured = CloudDbConfig.IsConfigured || !string.IsNullOrWhiteSpace(AppSettingsService.SyncConnectionString);
-            var lblBackend = new Label
-            {
-                Text = isConfigured ? "🟢 Cloud Backend: Configured & Ready" : "⚪ Cloud Backend: Pending Configuration",
-                ForeColor = isConfigured ? Color.SeaGreen : Color.DimGray,
-                Location = new Point(20, _y),
-                AutoSize = true
-            };
-            page.Controls.Add(lblBackend);
-            _y += 22;
-
-            var last = AppSettingsService.LastSyncAtUtc;
-            var lblLast = new Label
-            {
-                Text = string.IsNullOrWhiteSpace(last) ? "Last successful cloud backup: Never" : $"Last successful cloud backup: {last}",
-                ForeColor = Color.DimGray,
-                Location = new Point(20, _y),
-                AutoSize = true
-            };
-            page.Controls.Add(lblLast);
-            _y += 22;
-
-            var lblSyncStatus = new Label
-            {
-                Text = $"Current sync status: {SyncService.LastStatus}",
-                ForeColor = Color.DarkSlateBlue,
-                Location = new Point(20, _y),
-                AutoSize = true
-            };
-            page.Controls.Add(lblSyncStatus);
 
             return tp;
         }
@@ -781,6 +1086,45 @@ namespace BillingSuite.App.Forms
                 // AiAgentService.GetApiKey() reads AppSettingKeys.AiApiKey from the DB first.
                 AppSettingsService.SetMany(values);
                 AppSettingsService.Invalidate();
+
+                // Synchronize company profile changes into the logged-in user's profile and database
+                if (AuthService.CurrentUser != null)
+                {
+                    try
+                    {
+                        using var db = new AppDbContext();
+                        var u = db.Users.FirstOrDefault(x => x.Id == AuthService.CurrentUser.Id);
+                        if (u != null)
+                        {
+                            if (values.TryGetValue(AppSettingKeys.CompanyName, out var compName)) u.CompanyName = compName;
+                            if (values.TryGetValue(AppSettingKeys.CompanyAddress1, out var compAddr)) u.CompanyAddress = compAddr;
+                            if (values.TryGetValue(AppSettingKeys.CompanyPhone, out var compPhone)) u.CompanyPhone = compPhone;
+                            if (values.TryGetValue(AppSettingKeys.CompanyEmail, out var compEmail)) u.CompanyEmail = compEmail;
+                            if (values.TryGetValue(AppSettingKeys.CompanyTaxNumber, out var compTax)) u.CompanyTaxNumber = compTax;
+                            db.SaveChanges();
+
+                            AuthService.CurrentUser.CompanyName = u.CompanyName;
+                            AuthService.CurrentUser.CompanyAddress = u.CompanyAddress;
+                            AuthService.CurrentUser.CompanyPhone = u.CompanyPhone;
+                            AuthService.CurrentUser.CompanyEmail = u.CompanyEmail;
+                            AuthService.CurrentUser.CompanyTaxNumber = u.CompanyTaxNumber;
+
+                            var connStr = CloudDbConfig.GetConnectionString();
+                            if (!string.IsNullOrWhiteSpace(connStr) && SyncService.IsNetworkAvailable())
+                            {
+                                Task.Run(async () =>
+                                {
+                                    try { await OnlineDatabaseService.CloudRegisterUserAsync(connStr, u); } catch { }
+                                });
+                            }
+                        }
+                    }
+                    catch { }
+                }
+
+                var mainForm = Application.OpenForms.OfType<Form1>().FirstOrDefault() ?? (Owner as Form1) ?? (TopLevelControl as Form1) ?? (ParentForm as Form1);
+                mainForm?.UpdateWindowTitle();
+
                 _lblStatus.Text = $"Settings saved at {DateTime.Now:HH:mm:ss}.";
                 _lblStatus.ForeColor = Color.SeaGreen;
             }
@@ -813,11 +1157,16 @@ namespace BillingSuite.App.Forms
             AppSettingsService.SeedDefaults();
             AppSettingsService.Invalidate();
 
+            int savedIndex = _tabs.SelectedIndex;
             _tabs.TabPages.Clear();
             _readers.Clear();
             _writers.Clear();
             _tabKeys.Clear();
             BuildTabs();
+            if (savedIndex >= 0 && savedIndex < _tabs.TabPages.Count)
+            {
+                _tabs.SelectedIndex = savedIndex;
+            }
             _lblStatus.Text = $"\"{tabName}\" reset to defaults.";
             _lblStatus.ForeColor = Color.DarkOrange;
         }

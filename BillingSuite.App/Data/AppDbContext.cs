@@ -36,7 +36,7 @@ namespace BillingSuite.App.Data
             if (!optionsBuilder.IsConfigured)
             {
                 var dbPath = Services.AppPaths.DatabaseFile;
-                optionsBuilder.UseSqlite($"Data Source={dbPath}")
+                optionsBuilder.UseSqlite($"Data Source={dbPath};Default Timeout=30;")
                     .ConfigureWarnings(w => w.Ignore(RelationalEventId.PendingModelChangesWarning));
             }
         }
@@ -55,6 +55,11 @@ namespace BillingSuite.App.Data
             _currentUserId = AuthService.CurrentUser?.Id;
             // Database initialization is now handled centrally in DbInitializer
             // to ensure Migrations are applied correctly on startup.
+        }
+
+        public AppDbContext(int? currentUserId)
+        {
+            _currentUserId = currentUserId;
         }
 
         protected override void OnModelCreating(ModelBuilder modelBuilder)
@@ -111,39 +116,108 @@ namespace BillingSuite.App.Data
                 var param = Expression.Parameter(entityType.ClrType, "e");
                 var ownerProp = Expression.Property(param, nameof(IOwnedEntity.OwnerUserId)); // int?
 
-                // _currentUserId == null  → not signed in, see all
-                var notSignedIn = Expression.Equal(currentUserIdExpr, Expression.Constant(null, typeof(int?)));
-                // e.OwnerUserId == null   → legacy / shared row
-                var noOwner = Expression.Equal(ownerProp, Expression.Constant(null, typeof(int?)));
-                // e.OwnerUserId == _currentUserId
+                // When a user is signed in (_currentUserId != null):
+                // STRICT ISOLATION: show ONLY rows belonging to the current user (e.OwnerUserId == _currentUserId).
+                // When NO user is signed in (_currentUserId == null):
+                // Show legacy/unowned rows (e.OwnerUserId == null).
+                var signedIn = Expression.NotEqual(currentUserIdExpr, Expression.Constant(null, typeof(int?)));
                 var isOwner = Expression.Equal(ownerProp, currentUserIdExpr);
+                var noOwner = Expression.Equal(ownerProp, Expression.Constant(null, typeof(int?)));
 
-                var body = Expression.OrElse(notSignedIn, Expression.OrElse(noOwner, isOwner));
+                var body = Expression.Condition(signedIn, isOwner, noOwner);
                 modelBuilder.Entity(entityType.ClrType).HasQueryFilter(Expression.Lambda(body, param));
             }
+
+            // Universal resilient DateTime converter for SQLite:
+            // Prevents "String '' was not recognized as a valid DateTime" when reading legacy or empty date strings.
+            var dateTimeConverter = new Microsoft.EntityFrameworkCore.Storage.ValueConversion.ValueConverter<DateTime, string>(
+                v => v.ToString("yyyy-MM-dd HH:mm:ss.FFFFFFF"),
+                v => ParseSafeDate(v)
+            );
+
+            var nullableDateTimeConverter = new Microsoft.EntityFrameworkCore.Storage.ValueConversion.ValueConverter<DateTime?, string?>(
+                v => v.HasValue ? v.Value.ToString("yyyy-MM-dd HH:mm:ss.FFFFFFF") : null,
+                v => ParseSafeNullableDate(v)
+            );
+
+            foreach (var entityType in modelBuilder.Model.GetEntityTypes())
+            {
+                foreach (var property in entityType.GetProperties())
+                {
+                    if (property.ClrType == typeof(DateTime))
+                    {
+                        property.SetValueConverter(dateTimeConverter);
+                    }
+                    else if (property.ClrType == typeof(DateTime?))
+                    {
+                        property.SetValueConverter(nullableDateTimeConverter);
+                    }
+                }
+            }
+        }
+
+        private static DateTime ParseSafeDate(string? s)
+        {
+            if (string.IsNullOrWhiteSpace(s)) return DateTime.UtcNow;
+            return DateTime.TryParse(s, out var dt) ? dt : DateTime.UtcNow;
+        }
+
+        private static DateTime? ParseSafeNullableDate(string? s)
+        {
+            if (string.IsNullOrWhiteSpace(s)) return null;
+            return DateTime.TryParse(s, out var dt) ? dt : null;
         }
 
         private void StampOwners()
         {
-            var user = AuthService.CurrentUser;
-            if (user == null) return;
+            var userId = _currentUserId ?? AuthService.CurrentUser?.Id;
+            if (userId == null) return;
             foreach (var entry in ChangeTracker.Entries<IOwnedEntity>())
                 if (entry.State == EntityState.Added && entry.Entity.OwnerUserId == null)
-                    entry.Entity.OwnerUserId = user.Id;
+                    entry.Entity.OwnerUserId = userId.Value;
+        }
+
+        private void StampTimestamps()
+        {
+            if (SyncService._isPulling) return;
+            var now = DateTime.UtcNow;
+            foreach (var entry in ChangeTracker.Entries())
+            {
+                if (entry.State == EntityState.Modified || entry.State == EntityState.Added)
+                {
+                    var prop = entry.Metadata.FindProperty("UpdatedAt");
+                    if (prop != null)
+                    {
+                        entry.Property("UpdatedAt").CurrentValue = now;
+                    }
+                }
+            }
         }
 
         public override int SaveChanges()
         {
             StampOwners();
+            StampTimestamps();
             GenerateSkus();
-            return base.SaveChanges();
+            var res = base.SaveChanges();
+            if (res > 0 && !SyncService._isPulling)
+            {
+                try { SyncService.QueueInstantSync(); } catch { }
+            }
+            return res;
         }
 
-        public override Task<int> SaveChangesAsync(System.Threading.CancellationToken cancellationToken = default)
+        public override async Task<int> SaveChangesAsync(System.Threading.CancellationToken cancellationToken = default)
         {
             StampOwners();
+            StampTimestamps();
             GenerateSkus();
-            return base.SaveChangesAsync(cancellationToken);
+            var res = await base.SaveChangesAsync(cancellationToken);
+            if (res > 0 && !SyncService._isPulling)
+            {
+                try { SyncService.QueueInstantSync(); } catch { }
+            }
+            return res;
         }
 
         private void GenerateSkus()

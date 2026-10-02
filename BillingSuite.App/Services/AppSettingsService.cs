@@ -130,12 +130,12 @@ namespace BillingSuite.App.Services
         public static string AiModel => GetString(AppSettingKeys.AiModel, "gemini-1.5-flash");
 
         // --- Sync & Online Database ---
-        public static bool SyncEnabled => GetBool(AppSettingKeys.SyncEnabled, false);
+        public static bool SyncEnabled => GetBool(AppSettingKeys.SyncEnabled, true);
         public static string SyncServerUrl => GetString(AppSettingKeys.SyncServerUrl);
         public static string SyncConnectionString => GetString(AppSettingKeys.SyncConnectionString);
         public static string SyncDbProvider => GetString(AppSettingKeys.SyncDbProvider, "PostgreSQL");
         public static bool SyncAutoMigrate => GetBool(AppSettingKeys.SyncAutoMigrate, true);
-        public static int SyncIntervalMinutes => GetInt(AppSettingKeys.SyncIntervalMinutes, 15);
+        public static int SyncIntervalMinutes => GetInt(AppSettingKeys.SyncIntervalMinutes, 2);
         public static bool SyncOnStartup => GetBool(AppSettingKeys.SyncOnStartup, true);
         public static string LastSyncAtUtc => GetString(AppSettingKeys.LastSyncAtUtc);
 
@@ -161,19 +161,38 @@ namespace BillingSuite.App.Services
         /// <summary>Writes one value and invalidates the cache.</summary>
         public static void Set(string key, string? value)
         {
-            using (var db = new AppDbContext())
+            if (string.IsNullOrWhiteSpace(key)) return;
+            try
             {
-                var row = db.AppSettings.FirstOrDefault(s => s.Key == key);
-                if (row == null)
+                using var db = new AppDbContext();
+                var rows = db.AppSettings.Where(s => s.Key == key).ToList();
+                if (rows.Count == 0)
                 {
                     db.AppSettings.Add(new AppSetting { Key = key, Value = value, UpdatedAt = DateTime.UtcNow });
                 }
                 else
                 {
-                    row.Value = value;
-                    row.UpdatedAt = DateTime.UtcNow;
+                    rows[0].Value = value;
+                    rows[0].UpdatedAt = DateTime.UtcNow;
+                    if (rows.Count > 1)
+                    {
+                        db.AppSettings.RemoveRange(rows.Skip(1));
+                    }
                 }
                 db.SaveChanges();
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[AppSettingsService.Set Fallback] Error writing key '{key}': {ex.Message} -> {ex.InnerException?.Message}");
+                try
+                {
+                    using var dbFallback = new AppDbContext();
+                    dbFallback.Database.ExecuteSqlRaw(
+                        "INSERT INTO AppSettings (\"Key\", \"Value\", \"UpdatedAt\") VALUES ({0}, {1}, datetime('now')) " +
+                        "ON CONFLICT(\"Key\") DO UPDATE SET \"Value\" = excluded.\"Value\", \"UpdatedAt\" = datetime('now');",
+                        key, value ?? "");
+                }
+                catch { }
             }
             Invalidate();
         }
@@ -181,20 +200,45 @@ namespace BillingSuite.App.Services
         /// <summary>Writes many values in one transaction.</summary>
         public static void SetMany(IEnumerable<KeyValuePair<string, string?>> values)
         {
-            using (var db = new AppDbContext())
+            try
             {
+                using var db = new AppDbContext();
                 foreach (var kv in values)
                 {
-                    var row = db.AppSettings.FirstOrDefault(s => s.Key == kv.Key);
-                    if (row == null)
+                    if (string.IsNullOrWhiteSpace(kv.Key)) continue;
+                    var rows = db.AppSettings.Where(s => s.Key == kv.Key).ToList();
+                    if (rows.Count == 0)
+                    {
                         db.AppSettings.Add(new AppSetting { Key = kv.Key, Value = kv.Value, UpdatedAt = DateTime.UtcNow });
+                    }
                     else
                     {
-                        row.Value = kv.Value;
-                        row.UpdatedAt = DateTime.UtcNow;
+                        rows[0].Value = kv.Value;
+                        rows[0].UpdatedAt = DateTime.UtcNow;
+                        if (rows.Count > 1)
+                        {
+                            db.AppSettings.RemoveRange(rows.Skip(1));
+                        }
                     }
                 }
                 db.SaveChanges();
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[AppSettingsService.SetMany Fallback] Error: {ex.Message} -> {ex.InnerException?.Message}");
+                try
+                {
+                    using var dbFallback = new AppDbContext();
+                    foreach (var kv in values)
+                    {
+                        if (string.IsNullOrWhiteSpace(kv.Key)) continue;
+                        dbFallback.Database.ExecuteSqlRaw(
+                            "INSERT INTO AppSettings (\"Key\", \"Value\", \"UpdatedAt\") VALUES ({0}, {1}, datetime('now')) " +
+                            "ON CONFLICT(\"Key\") DO UPDATE SET \"Value\" = excluded.\"Value\", \"UpdatedAt\" = datetime('now');",
+                            kv.Key, kv.Value ?? "");
+                    }
+                }
+                catch { }
             }
             Invalidate();
         }
@@ -208,6 +252,7 @@ namespace BillingSuite.App.Services
             var defaults = new Dictionary<string, string?>
             {
                 [AppSettingKeys.CompanyName] = "Your Company",
+                [AppSettingKeys.CompanyCountry] = "India",
                 [AppSettingKeys.CompanyTaxLabel] = "GST",
                 [AppSettingKeys.CurrencySymbol] = "₹",
                 [AppSettingKeys.CurrencyCode] = "INR",
@@ -281,7 +326,7 @@ namespace BillingSuite.App.Services
                 [AppSettingKeys.SyncDbProvider] = "PostgreSQL",
                 [AppSettingKeys.SyncConnectionString] = "",
                 [AppSettingKeys.SyncAutoMigrate] = "true",
-                [AppSettingKeys.SyncIntervalMinutes] = "15",
+                [AppSettingKeys.SyncIntervalMinutes] = "2",
                 [AppSettingKeys.SyncOnStartup] = "true",
 
                 [AppSettingKeys.AppTheme] = "Light",

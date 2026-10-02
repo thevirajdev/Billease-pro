@@ -22,6 +22,7 @@ namespace BillingSuite.App.Forms
 
         public ProductPickerForm()
         {
+            Services.FormIconHelper.ApplyIcon(this);
             Text = "Select Product";
             StartPosition = FormStartPosition.CenterParent;
             Size = new Size(800, 520);

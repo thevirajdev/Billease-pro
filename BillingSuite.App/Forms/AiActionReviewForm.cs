@@ -24,6 +24,7 @@ namespace BillingSuite.App.Forms
 
         public AiActionReviewForm(AiActionResponse aiResponse)
         {
+            Services.FormIconHelper.ApplyIcon(this);
             _aiResponse = aiResponse;
             ResultResponse = aiResponse;
 

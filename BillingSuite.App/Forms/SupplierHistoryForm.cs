@@ -22,6 +22,7 @@ namespace BillingSuite.App.Forms
 
         public SupplierHistoryForm(int supplierId)
         {
+            Services.FormIconHelper.ApplyIcon(this);
             _supplierId = supplierId;
             Text = "Supplier Purchase History";
             StartPosition = FormStartPosition.CenterParent;
@@ -50,7 +51,9 @@ namespace BillingSuite.App.Forms
             pnlToolbar.Controls.Add(pnlSearch);
             Controls.Add(pnlToolbar);
 
-            split.Orientation = Orientation.Horizontal; split.Dock = DockStyle.Fill; split.SplitterDistance = 260; Controls.Add(split);
+            split.Orientation = Orientation.Horizontal; split.Dock = DockStyle.Fill; 
+            try { split.SplitterDistance = 260; } catch { }
+            Controls.Add(split);
             split.BringToFront(); 
 
             ConfigureGrid(gridPurchases); ConfigureGrid(gridItems);

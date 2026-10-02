@@ -30,6 +30,7 @@ namespace BillingSuite.App.Services
 
                     // Swap
                     System.IO.File.Move(pendingPath, dbPath);
+                    try { AppSettingsService.Set("RestoreBackupForceCloudPush", "true"); } catch { }
                     
                     MessageBox.Show("Database successfully restored from backup. Welcome back!", 
                         "System Information", MessageBoxButtons.OK, MessageBoxIcon.Information);
@@ -49,6 +50,12 @@ namespace BillingSuite.App.Services
             {
                 using (var db = new AppDbContext())
                 {
+                    try
+                    {
+                        db.Database.ExecuteSqlRaw("PRAGMA journal_mode = WAL; PRAGMA busy_timeout = 30000;");
+                    }
+                    catch { }
+
                     // Ensure database is up to date with latest schema
                     try 
                     { 
@@ -60,6 +67,16 @@ namespace BillingSuite.App.Services
                             Console.WriteLine("Applying blueprints to fresh database...");
                         }
                         db.Database.Migrate(); 
+
+                        // Always patch missing columns and sanitize after migration
+                        try
+                        {
+                            var conn = db.Database.GetDbConnection();
+                            if (conn.State != System.Data.ConnectionState.Open) conn.Open();
+                            PatchMissingColumns(conn);
+                            SanitizeDateTimesAndDeduplicateSettings(conn);
+                        }
+                        catch { }
                     }
                     catch (Exception ex) when (IsOutOfDiskSpace(ex))
                     {
@@ -211,41 +228,54 @@ namespace BillingSuite.App.Services
                 }
                 catch { /* Backup failure shouldn't stop the app but we log it mentally */ }
 
-                // 2. CHECK FOR LEGACY DATABASE
-                // If AiChatMessages already exists (user's error case), it's a legacy DB
-                bool isLegacy = false;
+                // 2. CHECK FOR EXISTING / LEGACY DATABASE
+                // A database is legacy ONLY if core business tables (like Products, Invoices, Customers) exist,
+                // but __EFMigrationsHistory does not have the Baseline migration recorded yet.
+                bool hasExistingTables = false;
                 using (var cmd = conn.CreateCommand())
                 {
-                    cmd.CommandText = "SELECT name FROM sqlite_master WHERE type='table' AND name='AiChatMessages';";
-                    isLegacy = cmd.ExecuteScalar() != null;
+                    cmd.CommandText = "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name IN ('Products', 'Invoices', 'Customers');";
+                    hasExistingTables = Convert.ToInt32(cmd.ExecuteScalar()) > 0;
                 }
 
-                // 3. SCHEMA HANDSHAKE. Ensure __EFMigrationsHistory exists and carries the
-                // Baseline stamp, so Migrate() treats a legacy database as already migrated
-                // instead of trying to CREATE TABLE over tables that already exist.
-                try
+                if (hasExistingTables)
                 {
-                    using (var cmd = conn.CreateCommand())
+                    // 3. SCHEMA HANDSHAKE. Ensure __EFMigrationsHistory exists and carries the
+                    // Baseline stamp, so Migrate() treats a legacy database as already migrated
+                    // instead of trying to CREATE TABLE over tables that already exist.
+                    try
                     {
-                        cmd.CommandText = "CREATE TABLE IF NOT EXISTS \"__EFMigrationsHistory\" (\"MigrationId\" TEXT NOT NULL PRIMARY KEY, \"ProductVersion\" TEXT NOT NULL);";
-                        cmd.ExecuteNonQuery();
-
-                        cmd.CommandText = "SELECT COUNT(*) FROM \"__EFMigrationsHistory\" WHERE \"MigrationId\" = '20251031120023_Baseline';";
-                        bool hasBaseline = Convert.ToInt32(cmd.ExecuteScalar()) > 0;
-
-                        if (!hasBaseline)
+                        using (var cmd = conn.CreateCommand())
                         {
-                            cmd.CommandText = "INSERT INTO \"__EFMigrationsHistory\" (\"MigrationId\", \"ProductVersion\") VALUES ('20251031120023_Baseline', '9.0.10');";
+                            cmd.CommandText = "CREATE TABLE IF NOT EXISTS \"__EFMigrationsHistory\" (\"MigrationId\" TEXT NOT NULL PRIMARY KEY, \"ProductVersion\" TEXT NOT NULL);";
                             cmd.ExecuteNonQuery();
+
+                            cmd.CommandText = "SELECT COUNT(*) FROM \"__EFMigrationsHistory\" WHERE \"MigrationId\" = '20251031120023_Baseline';";
+                            bool hasBaseline = Convert.ToInt32(cmd.ExecuteScalar()) > 0;
+
+                            if (!hasBaseline)
+                            {
+                                cmd.CommandText = "INSERT INTO \"__EFMigrationsHistory\" (\"MigrationId\", \"ProductVersion\") VALUES ('20251031120023_Baseline', '9.0.10');";
+                                cmd.ExecuteNonQuery();
+                            }
                         }
                     }
-                }
-                catch (Exception handshakeEx)
-                {
-                    Console.WriteLine($"Schema handshake warning: {handshakeEx.Message}");
+                    catch (Exception handshakeEx)
+                    {
+                        Console.WriteLine($"Schema handshake warning: {handshakeEx.Message}");
+                    }
+
+                    // 4. SAFE PATCH: Add missing columns to legacy database before migration
+                    PatchMissingColumns(conn);
+
+                    // 5. SANITIZE DATES & DEDUPLICATE SETTINGS:
+                    SanitizeDateTimesAndDeduplicateSettings(conn);
+
+                    // 6. AUTO-HEAL: Hydrate legacy data into new required fields
+                    ProHydrateAll(conn);
                 }
 
-                // 4. CLEAR STALE MIGRATION LOCK. EF Core's Migrate() acquires a row in
+                // 7. CLEAR STALE MIGRATION LOCK. EF Core's Migrate() acquires a row in
                 // __EFMigrationsLock and waits indefinitely for it. If a previous run was
                 // killed mid-migration (crash, taskkill, power loss), that row survives and
                 // every later launch hangs forever on startup with no window and no error.
@@ -265,20 +295,6 @@ namespace BillingSuite.App.Services
                 catch (Exception lockEx)
                 {
                     Console.WriteLine($"Migration lock cleanup warning: {lockEx.Message}");
-                }
-
-                // 5. SAFE PATCH: Add missing columns to ANY database whose physical schema
-                // lags the EF model. This must NOT be gated on isLegacy: a database can be
-                // stamped with the Baseline migration in __EFMigrationsHistory while its
-                // Invoices table still lacks the Customer*Snapshot columns, in which case
-                // Migrate() treats Baseline as applied and never repairs them, and every
-                // subsequent query throws "no such column: CustomerAddressSnapshot".
-                PatchMissingColumns(conn);
-
-                // 6. AUTO-HEAL: Hydrate legacy data into new required fields
-                if (isLegacy)
-                {
-                    ProHydrateAll(conn);
                 }
             }
             catch (Exception ex)
@@ -319,7 +335,7 @@ namespace BillingSuite.App.Services
             EnsureTable("Users",
                 "CREATE TABLE IF NOT EXISTS \"Users\" (\"Id\" INTEGER NOT NULL CONSTRAINT \"PK_Users\" PRIMARY KEY AUTOINCREMENT, \"Email\" TEXT NOT NULL DEFAULT '', \"FullName\" TEXT NOT NULL DEFAULT '', \"PasswordHash\" TEXT NOT NULL DEFAULT '', \"PasswordSalt\" TEXT NOT NULL DEFAULT '', \"PasswordIterations\" INTEGER NOT NULL DEFAULT 0, \"Phone\" TEXT NULL, \"Role\" TEXT NULL, \"CompanyName\" TEXT NULL, \"CompanyAddress\" TEXT NULL, \"CompanyPhone\" TEXT NULL, \"CompanyEmail\" TEXT NULL, \"CompanyTaxNumber\" TEXT NULL, \"CreatedAt\" TEXT NOT NULL DEFAULT '', \"LastLoginAt\" TEXT NULL, \"DisabledAt\" TEXT NULL);");
             EnsureTable("Products",
-                "CREATE TABLE IF NOT EXISTS \"Products\" (\"Id\" INTEGER NOT NULL CONSTRAINT \"PK_Products\" PRIMARY KEY AUTOINCREMENT, \"Barcode\" TEXT NOT NULL DEFAULT '', \"Name\" TEXT NOT NULL DEFAULT '', \"Description\" TEXT NULL, \"Price\" TEXT NOT NULL DEFAULT '0', \"MRP\" TEXT NOT NULL DEFAULT '0', \"Category\" TEXT NULL, \"Stock\" INTEGER NOT NULL DEFAULT 0, \"Hsn\" TEXT NULL, \"MarketedBy\" TEXT NULL, \"ExpiryAlertDays\" INTEGER NULL, \"LowStockThreshold\" REAL NULL, \"CreatedAt\" TEXT NOT NULL DEFAULT '', \"UpdatedAt\" TEXT NULL, \"OwnerUserId\" INTEGER NULL);");
+                "CREATE TABLE IF NOT EXISTS \"Products\" (\"Id\" INTEGER NOT NULL CONSTRAINT \"PK_Products\" PRIMARY KEY AUTOINCREMENT, \"Barcode\" TEXT NOT NULL DEFAULT '', \"Name\" TEXT NOT NULL DEFAULT '', \"Description\" TEXT NULL, \"Price\" TEXT NOT NULL DEFAULT '0', \"MRP\" TEXT NOT NULL DEFAULT '0', \"Category\" TEXT NULL, \"Stock\" INTEGER NOT NULL DEFAULT 0, \"Hsn\" TEXT NULL, \"MarketedBy\" TEXT NULL, \"ExpiryAlertDays\" INTEGER NULL, \"LowStockThreshold\" REAL NULL, \"NewBatch\" TEXT NULL, \"NewStock\" REAL NULL, \"NewCostPrice\" REAL NULL, \"NewSellingPrice\" REAL NULL, \"NewMrp\" REAL NULL, \"NewExpiry\" TEXT NULL, \"OldBatch\" TEXT NULL, \"OldStock\" REAL NULL, \"OldCostPrice\" REAL NULL, \"OldSellingPrice\" REAL NULL, \"OldMrp\" REAL NULL, \"OldExpiry\" TEXT NULL, \"VeryOldBatch\" TEXT NULL, \"VeryOldStock\" REAL NULL, \"VeryOldCostPrice\" REAL NULL, \"VeryOldSellingPrice\" REAL NULL, \"VeryOldMrp\" REAL NULL, \"VeryOldExpiry\" TEXT NULL, \"CreatedAt\" TEXT NOT NULL DEFAULT '', \"UpdatedAt\" TEXT NULL, \"OwnerUserId\" INTEGER NULL);");
             EnsureTable("Customers",
                 "CREATE TABLE IF NOT EXISTS \"Customers\" (\"Id\" INTEGER NOT NULL CONSTRAINT \"PK_Customers\" PRIMARY KEY AUTOINCREMENT, \"Name\" TEXT NOT NULL DEFAULT '', \"Email\" TEXT NULL, \"Phone\" TEXT NULL, \"Address1\" TEXT NULL, \"Address2\" TEXT NULL, \"City\" TEXT NULL, \"State\" TEXT NULL, \"PostalCode\" TEXT NULL, \"Country\" TEXT NULL, \"GstVatNumber\" TEXT NULL, \"CreatedAt\" TEXT NOT NULL DEFAULT '', \"UpdatedAt\" TEXT NULL, \"OwnerUserId\" INTEGER NULL);");
             EnsureTable("Invoices",
@@ -328,9 +344,24 @@ namespace BillingSuite.App.Services
                 "CREATE TABLE IF NOT EXISTS \"InvoiceItems\" (\"Id\" INTEGER NOT NULL CONSTRAINT \"PK_InvoiceItems\" PRIMARY KEY AUTOINCREMENT, \"InvoiceId\" INTEGER NOT NULL DEFAULT 0, \"ProductIdRef\" INTEGER NULL, \"ProductId\" TEXT NOT NULL DEFAULT '', \"Description\" TEXT NOT NULL DEFAULT '', \"Price\" TEXT NOT NULL DEFAULT '0', \"CostPrice\" REAL NULL, \"Quantity\" TEXT NOT NULL DEFAULT '0', \"LineTotal\" TEXT NOT NULL DEFAULT '0', \"ProductName\" TEXT NOT NULL DEFAULT '', \"BatchNumber\" TEXT NULL, \"OwnerUserId\" INTEGER NULL);");
             EnsureTable("Payments",
                 "CREATE TABLE IF NOT EXISTS \"Payments\" (\"Id\" INTEGER NOT NULL CONSTRAINT \"PK_Payments\" PRIMARY KEY AUTOINCREMENT, \"InvoiceId\" INTEGER NOT NULL DEFAULT 0, \"Date\" TEXT NOT NULL DEFAULT '', \"Method\" TEXT NULL, \"Amount\" TEXT NOT NULL DEFAULT '0', \"Notes\" TEXT NULL, \"OwnerUserId\" INTEGER NULL);");
-            // Key/value store for user settings. Created here for the same reason as the
-            // tables above: the migration chain is squashed, so EnsureTable is what makes
-            // the schema true on an existing database.
+            EnsureTable("ProductBatches",
+                "CREATE TABLE IF NOT EXISTS \"ProductBatches\" (\"Id\" INTEGER NOT NULL CONSTRAINT \"PK_ProductBatches\" PRIMARY KEY AUTOINCREMENT, \"ProductIdRef\" INTEGER NOT NULL DEFAULT 0, \"BatchNumber\" TEXT NOT NULL DEFAULT '', \"Hsn\" TEXT NULL, \"Expiry\" TEXT NULL, \"Mrp\" REAL NULL, \"CostPrice\" REAL NULL, \"SellingPrice\" REAL NULL, \"Stock\" REAL NULL, \"ExpiredStock\" REAL NULL, \"Bonus\" TEXT NULL, \"Pack\" TEXT NULL, \"MarketedBy\" TEXT NULL, \"Rate\" REAL NULL, \"DiscountPercent\" REAL NULL, \"CgstPercent\" REAL NULL, \"SgstPercent\" REAL NULL, \"IgstPercent\" REAL NULL, \"CreatedAt\" TEXT NOT NULL DEFAULT '', \"UpdatedAt\" TEXT NULL, \"OwnerUserId\" INTEGER NULL);");
+            EnsureTable("Purchases",
+                "CREATE TABLE IF NOT EXISTS \"Purchases\" (\"Id\" INTEGER NOT NULL CONSTRAINT \"PK_Purchases\" PRIMARY KEY AUTOINCREMENT, \"SupplierId\" INTEGER NULL, \"PurchaseDate\" TEXT NOT NULL DEFAULT '', \"InvoiceNumber\" TEXT NULL, \"Notes\" TEXT NULL, \"SubTotal\" REAL NULL, \"TaxAmount\" REAL NULL, \"GrandTotal\" REAL NULL, \"TotalPaid\" REAL NULL, \"BackDues\" REAL NULL, \"Balance\" REAL NULL, \"TotalDiscount\" REAL NULL, \"TotalCgst\" REAL NULL, \"TotalSgst\" REAL NULL, \"TotalIgst\" REAL NULL, \"CreatedAt\" TEXT NOT NULL DEFAULT '', \"UpdatedAt\" TEXT NULL, \"OwnerUserId\" INTEGER NULL);");
+            EnsureTable("PurchaseItems",
+                "CREATE TABLE IF NOT EXISTS \"PurchaseItems\" (\"Id\" INTEGER NOT NULL CONSTRAINT \"PK_PurchaseItems\" PRIMARY KEY AUTOINCREMENT, \"PurchaseId\" INTEGER NOT NULL DEFAULT 0, \"ProductId\" TEXT NOT NULL DEFAULT '', \"Batch\" TEXT NULL, \"Expiry\" TEXT NULL, \"Qty\" REAL NOT NULL DEFAULT 0, \"Cost\" REAL NOT NULL DEFAULT 0, \"Total\" REAL NOT NULL DEFAULT 0, \"Mrp\" REAL NULL, \"Sell\" REAL NULL, \"Rate\" REAL NULL, \"DiscountPercent\" REAL NULL, \"CgstPercent\" REAL NULL, \"SgstPercent\" REAL NULL, \"IgstPercent\" REAL NULL, \"OwnerUserId\" INTEGER NULL);");
+            EnsureTable("PurchasePayments",
+                "CREATE TABLE IF NOT EXISTS \"PurchasePayments\" (\"Id\" INTEGER NOT NULL CONSTRAINT \"PK_PurchasePayments\" PRIMARY KEY AUTOINCREMENT, \"PurchaseId\" INTEGER NOT NULL DEFAULT 0, \"PaymentDate\" TEXT NOT NULL DEFAULT '', \"Amount\" REAL NOT NULL DEFAULT 0, \"PaymentMethod\" TEXT NULL, \"Notes\" TEXT NULL, \"OwnerUserId\" INTEGER NULL);");
+            EnsureTable("Suppliers",
+                "CREATE TABLE IF NOT EXISTS \"Suppliers\" (\"Id\" INTEGER NOT NULL CONSTRAINT \"PK_Suppliers\" PRIMARY KEY AUTOINCREMENT, \"Name\" TEXT NOT NULL DEFAULT '', \"Email\" TEXT NULL, \"Phone\" TEXT NULL, \"City\" TEXT NULL, \"State\" TEXT NULL, \"GstNumber\" TEXT NULL, \"BackDues\" REAL NOT NULL DEFAULT 0, \"LastPurchaseAt\" TEXT NULL, \"CreatedAt\" TEXT NOT NULL DEFAULT '', \"UpdatedAt\" TEXT NULL, \"OwnerUserId\" INTEGER NULL);");
+            EnsureTable("Expenses",
+                "CREATE TABLE IF NOT EXISTS \"Expenses\" (\"Id\" INTEGER NOT NULL CONSTRAINT \"PK_Expenses\" PRIMARY KEY AUTOINCREMENT, \"Description\" TEXT NOT NULL DEFAULT '', \"Amount\" TEXT NOT NULL DEFAULT '0', \"Category\" TEXT NOT NULL DEFAULT 'General', \"Date\" TEXT NOT NULL DEFAULT '', \"Note\" TEXT NULL, \"CreatedAt\" TEXT NOT NULL DEFAULT '', \"OwnerUserId\" INTEGER NULL);");
+            EnsureTable("DamagedItems",
+                "CREATE TABLE IF NOT EXISTS \"DamagedItems\" (\"Id\" INTEGER NOT NULL CONSTRAINT \"PK_DamagedItems\" PRIMARY KEY AUTOINCREMENT, \"ProductIdRef\" INTEGER NULL, \"BatchNumber\" TEXT NULL, \"Quantity\" REAL NOT NULL DEFAULT 0, \"Reason\" TEXT NULL, \"LossAmount\" REAL NOT NULL DEFAULT 0, \"Date\" TEXT NULL, \"CreatedAt\" TEXT NOT NULL DEFAULT '', \"OwnerUserId\" INTEGER NULL);");
+            EnsureTable("RecycleBin",
+                "CREATE TABLE IF NOT EXISTS \"RecycleBin\" (\"Id\" INTEGER NOT NULL CONSTRAINT \"PK_RecycleBin\" PRIMARY KEY AUTOINCREMENT, \"EntityType\" TEXT NOT NULL DEFAULT '', \"EntityId\" INTEGER NOT NULL DEFAULT 0, \"JsonData\" TEXT NOT NULL DEFAULT '', \"DeletedAt\" TEXT NOT NULL DEFAULT '', \"OwnerUserId\" INTEGER NULL);");
+            EnsureTable("AiChatMessages",
+                "CREATE TABLE IF NOT EXISTS \"AiChatMessages\" (\"Id\" INTEGER NOT NULL CONSTRAINT \"PK_AiChatMessages\" PRIMARY KEY AUTOINCREMENT, \"Role\" TEXT NOT NULL DEFAULT 'User', \"Content\" TEXT NOT NULL DEFAULT '', \"Timestamp\" TEXT NOT NULL DEFAULT '', \"OwnerUserId\" INTEGER NULL);");
             EnsureTable("AppSettings",
                 "CREATE TABLE IF NOT EXISTS \"AppSettings\" (\"Id\" INTEGER NOT NULL CONSTRAINT \"PK_AppSettings\" PRIMARY KEY AUTOINCREMENT, \"Key\" TEXT NOT NULL DEFAULT '', \"Value\" TEXT NULL, \"UpdatedAt\" TEXT NOT NULL DEFAULT '');");
 
@@ -379,11 +410,29 @@ namespace BillingSuite.App.Services
             // Patch ProductBatch ExpiredStock
             AddColumn("ProductBatches", "ExpiredStock", "REAL NULL");
 
-            // Patch Product Legacy Fields (Just in case)
+            // Patch Product Legacy & Batch Fields that EF expects
             AddColumn("Products", "ExpiryAlertDays", "INTEGER NULL");
             AddColumn("Products", "LowStockThreshold", "REAL NULL");
             AddColumn("Products", "Hsn", "TEXT NULL");
             AddColumn("Products", "MarketedBy", "TEXT NULL");
+            AddColumn("Products", "NewBatch", "TEXT NULL");
+            AddColumn("Products", "NewStock", "REAL NULL");
+            AddColumn("Products", "NewCostPrice", "REAL NULL");
+            AddColumn("Products", "NewSellingPrice", "REAL NULL");
+            AddColumn("Products", "NewMrp", "REAL NULL");
+            AddColumn("Products", "NewExpiry", "TEXT NULL");
+            AddColumn("Products", "OldBatch", "TEXT NULL");
+            AddColumn("Products", "OldStock", "REAL NULL");
+            AddColumn("Products", "OldCostPrice", "REAL NULL");
+            AddColumn("Products", "OldSellingPrice", "REAL NULL");
+            AddColumn("Products", "OldMrp", "REAL NULL");
+            AddColumn("Products", "OldExpiry", "TEXT NULL");
+            AddColumn("Products", "VeryOldBatch", "TEXT NULL");
+            AddColumn("Products", "VeryOldStock", "REAL NULL");
+            AddColumn("Products", "VeryOldCostPrice", "REAL NULL");
+            AddColumn("Products", "VeryOldSellingPrice", "REAL NULL");
+            AddColumn("Products", "VeryOldMrp", "REAL NULL");
+            AddColumn("Products", "VeryOldExpiry", "TEXT NULL");
 
             // Patch Financial Fields in Batches and Purchase Items
             foreach (var table in new[] { "ProductBatches", "PurchaseItems" })
@@ -421,7 +470,7 @@ namespace BillingSuite.App.Services
             // InvoiceItems.ProductId holds the product Barcode (SKU); ProductIdRef is the numeric FK.
             RunHydrationStep(conn, "InvoiceItems", @"
                 UPDATE InvoiceItems 
-                SET ProductName = COALESCE(NULLIF(ProductName, ''), (SELECT Name FROM Products WHERE Barcode = InvoiceItems.ProductId)),
+                SET ProductName = COALESCE(NULLIF(ProductName, ''), (SELECT Name FROM Products WHERE Barcode = InvoiceItems.ProductId), 'Item'),
                     ProductIdRef = COALESCE(ProductIdRef, (SELECT Id FROM Products WHERE Barcode = InvoiceItems.ProductId)),
                     CostPrice = COALESCE(CostPrice, 0.0)
                 WHERE (ProductName IS NULL OR ProductName = '') AND ProductId IS NOT NULL;");
@@ -591,6 +640,44 @@ namespace BillingSuite.App.Services
             catch (Exception ex)
             {
                 Console.WriteLine($"SKU Backfill Error: {ex.Message}");
+            }
+        }
+
+        private static void SanitizeDateTimesAndDeduplicateSettings(System.Data.Common.DbConnection conn)
+        {
+            var statements = new[]
+            {
+                "UPDATE AppSettings SET UpdatedAt = datetime('now') WHERE UpdatedAt = '' OR UpdatedAt IS NULL;",
+                "DELETE FROM AppSettings WHERE rowid NOT IN (SELECT MAX(rowid) FROM AppSettings GROUP BY Key);",
+                "CREATE UNIQUE INDEX IF NOT EXISTS UX_AppSettings_Key ON AppSettings(Key);",
+                "UPDATE Customers SET CreatedAt = datetime('now') WHERE CreatedAt = '' OR CreatedAt IS NULL;",
+                "UPDATE Customers SET UpdatedAt = NULL WHERE UpdatedAt = '';",
+                "UPDATE Products SET CreatedAt = datetime('now') WHERE CreatedAt = '' OR CreatedAt IS NULL;",
+                "UPDATE Products SET UpdatedAt = NULL WHERE UpdatedAt = '';",
+                "UPDATE Invoices SET CreatedAt = datetime('now') WHERE CreatedAt = '' OR CreatedAt IS NULL;",
+                "UPDATE Purchases SET CreatedAt = datetime('now') WHERE CreatedAt = '' OR CreatedAt IS NULL;",
+                "UPDATE Purchases SET UpdatedAt = NULL WHERE UpdatedAt = '';",
+                "UPDATE Expenses SET Date = datetime('now') WHERE Date = '' OR Date IS NULL;",
+                "UPDATE Expenses SET CreatedAt = datetime('now') WHERE CreatedAt = '' OR CreatedAt IS NULL;",
+                "UPDATE DamagedItems SET Date = datetime('now') WHERE Date = '' OR Date IS NULL;",
+                "UPDATE DamagedItems SET CreatedAt = datetime('now') WHERE CreatedAt = '' OR CreatedAt IS NULL;",
+                "UPDATE RecycleBin SET DeletedAt = datetime('now') WHERE DeletedAt = '' OR DeletedAt IS NULL;",
+                "UPDATE AiChatMessages SET Timestamp = datetime('now') WHERE Timestamp = '' OR Timestamp IS NULL;",
+                "UPDATE Users SET CreatedAt = datetime('now') WHERE CreatedAt = '' OR CreatedAt IS NULL;",
+                "UPDATE AppSettings SET Value = 'India' WHERE Key = 'company.country' AND (Value = 'Pakistan' OR Value = '' OR Value IS NULL);",
+                "UPDATE AppSettings SET Value = '' WHERE Key = 'company.city' AND Value = 'Lahore';",
+                "UPDATE AppSettings SET Value = '' WHERE Key = 'company.address1' AND Value = '12 Market Road';"
+            };
+
+            foreach (var sql in statements)
+            {
+                try
+                {
+                    using var cmd = conn.CreateCommand();
+                    cmd.CommandText = sql;
+                    cmd.ExecuteNonQuery();
+                }
+                catch { }
             }
         }
     }

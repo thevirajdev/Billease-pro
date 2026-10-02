@@ -19,6 +19,7 @@ namespace BillingSuite.App.Forms
 
         public CustomerHistoryForm(int customerId)
         {
+            Services.FormIconHelper.ApplyIcon(this);
             _customerId = customerId;
             Text = "Customer Invoice History";
             StartPosition = FormStartPosition.CenterParent;
@@ -48,7 +49,8 @@ namespace BillingSuite.App.Forms
             tool.Items.AddRange(new ToolStripItem[] { tsSearchBill, new ToolStripSeparator(), tsSearchProduct, new ToolStripSeparator(), tsProductHistory, new ToolStripSeparator(), tsReset });
             Controls.Add(tool);
 
-            split.Orientation = Orientation.Horizontal; split.Dock = DockStyle.Fill; split.SplitterDistance = 300; 
+            split.Orientation = Orientation.Horizontal; split.Dock = DockStyle.Fill; 
+            try { split.SplitterDistance = 300; } catch { }
             Controls.Add(split);
             split.BringToFront(); // ensure tool is above it if docked top
 

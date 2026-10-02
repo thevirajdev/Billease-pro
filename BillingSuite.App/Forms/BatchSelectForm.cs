@@ -32,6 +32,7 @@ namespace BillingSuite.App.Forms
 
         public BatchSelectForm(Product p, int? customerId = null)
         {
+            Services.FormIconHelper.ApplyIcon(this);
             product = p;
             this.customerId = customerId;
             Text = "Select Batch";

@@ -21,6 +21,7 @@ namespace BillingSuite.App.Forms
 
         public InvoicePreviewForm(Invoice invoice, string htmlContent)
         {
+            Services.FormIconHelper.ApplyIcon(this);
             this.invoice = invoice;
             this.htmlContent = htmlContent;
             
@@ -155,7 +156,28 @@ tfoot { display: table-footer-group; }
             var showBackDues = Services.AppSettingsService.InvoiceShow(AppSettingKeys.InvoiceShowBackDues);
             var showRoundOff = Services.AppSettingsService.InvoiceShow(AppSettingKeys.InvoiceShowRoundOff);
 
+            // Logo: build base64 data URI so the HTML is fully self-contained (no file:// path issues)
+            string logoImgTag = string.Empty;
+            if (Services.AppSettingsService.InvoiceShow(AppSettingKeys.InvoiceShowLogo))
+            {
+                var logoPath = Services.AppSettingsService.CompanyLogoPath;
+                if (!string.IsNullOrWhiteSpace(logoPath) && System.IO.File.Exists(logoPath))
+                {
+                    try
+                    {
+                        var ext = System.IO.Path.GetExtension(logoPath).ToLowerInvariant();
+                        var mime = ext == ".png" ? "image/png" : ext == ".gif" ? "image/gif" : "image/jpeg";
+                        var logoBytes = System.IO.File.ReadAllBytes(logoPath);
+                        var b64 = Convert.ToBase64String(logoBytes);
+                        logoImgTag = $"<img src='data:{mime};base64,{b64}' style='max-height:60px;max-width:180px;object-fit:contain;display:block;margin-bottom:4px;' alt='Logo' />";
+                    }
+                    catch { }
+                }
+            }
+
             var companyBlock = new System.Text.StringBuilder();
+            if (!string.IsNullOrEmpty(logoImgTag))
+                companyBlock.Append(logoImgTag);
             companyBlock.Append("<h2>" + System.Net.WebUtility.HtmlEncode(Services.AppSettingsService.CompanyName) + "</h2>");
             if (showCompanyAddress)
                 companyBlock.Append("<div>" + System.Net.WebUtility.HtmlEncode(Services.AppSettingsService.CompanyAddressBlock()).Replace("\r\n", "<br/>").Replace("\n", "<br/>") + "</div>");
@@ -169,17 +191,20 @@ tfoot { display: table-footer-group; }
             var customerBlock = new System.Text.StringBuilder();
             if (showBillTo)
             {
-                customerBlock.Append("<div style='margin-top:6px;'><strong>Bill To:</strong> " + System.Net.WebUtility.HtmlEncode(inv.Customer?.Name ?? "") + "</div>");
-                if (showCustomerAddress && inv.Customer != null)
+                var custName = !string.IsNullOrWhiteSpace(inv.Customer?.Name) ? inv.Customer.Name : (inv.CustomerNameSnapshot ?? "");
+                var custAddr = inv.Customer != null ? GetCustomerAddressStatic(inv.Customer) : (inv.CustomerAddressSnapshot ?? "");
+                var custPhone = !string.IsNullOrWhiteSpace(inv.Customer?.Phone) ? inv.Customer.Phone : (inv.CustomerPhoneSnapshot ?? "");
+                var custTax = !string.IsNullOrWhiteSpace(inv.Customer?.GstVatNumber) ? inv.Customer.GstVatNumber : (inv.CustomerGstSnapshot ?? "");
+
+                customerBlock.Append("<div style='margin-top:6px;'><strong>Bill To:</strong> " + System.Net.WebUtility.HtmlEncode(custName) + "</div>");
+                if (showCustomerAddress && !string.IsNullOrWhiteSpace(custAddr))
                 {
-                    var ca = GetCustomerAddressStatic(inv.Customer);
-                    if (!string.IsNullOrWhiteSpace(ca))
-                        customerBlock.Append("<div>" + System.Net.WebUtility.HtmlEncode(ca).Replace("\r\n", "<br/>").Replace("\n", "<br/>") + "</div>");
+                    customerBlock.Append("<div>" + System.Net.WebUtility.HtmlEncode(custAddr).Replace("\r\n", "<br/>").Replace("\n", "<br/>") + "</div>");
                 }
-                if (showCustomerPhone && !string.IsNullOrWhiteSpace(inv.Customer?.Phone))
-                    customerBlock.Append("<div>" + System.Net.WebUtility.HtmlEncode(inv.Customer.Phone) + "</div>");
-                if (showCustomerTax && inv.Customer != null && !string.IsNullOrWhiteSpace(inv.Customer.GstVatNumber))
-                    customerBlock.Append("<div>" + System.Net.WebUtility.HtmlEncode(inv.Customer.GstVatNumber) + "</div>");
+                if (showCustomerPhone && !string.IsNullOrWhiteSpace(custPhone))
+                    customerBlock.Append("<div>" + System.Net.WebUtility.HtmlEncode(custPhone) + "</div>");
+                if (showCustomerTax && !string.IsNullOrWhiteSpace(custTax))
+                    customerBlock.Append("<div>" + System.Net.WebUtility.HtmlEncode(custTax) + "</div>");
             }
 
             var invoiceMeta = new System.Text.StringBuilder();
@@ -271,8 +296,8 @@ tfoot { display: table-footer-group; }
             var rounded = Math.Round(gross, 0, MidpointRounding.AwayFromZero);
             var roundOff = rounded - gross;
             // The footer spans every column except the final Amount cell, so the span must
-            // track the toggles above (it was hardcoded to 10 and would misalign when hidden).
-            int colCount = 4
+            // track the toggles above: 6 fixed columns (SL, Name, Mkt, Price, Qty, Amount) plus optional columns.
+            int colCount = 6
                 + (showScheme ? 1 : 0) + (showPack ? 1 : 0) + (showBatch ? 1 : 0)
                 + (showExpiry ? 1 : 0) + (showMrp ? 1 : 0);
             int span = Math.Max(1, colCount - 1);
@@ -301,7 +326,7 @@ tfoot { display: table-footer-group; }
 
             html += "</div>";
             if (Services.AppSettingsService.InvoiceShow(AppSettingKeys.InvoiceShowSignature))
-                html += "<div style='margin-top:24px;'><div style='display:inline-block;border-top:1px solid #333;padding-top:4px;min-width:180px;'>Authorised Signature</div></div>";
+                html += "<div style='margin-top:24px; text-align:right;'><div style='display:inline-block; border-top:1px solid #333; padding-top:4px; min-width:180px; text-align:center;'>Authorised Signature</div></div>";
             var footerText = Services.AppSettingsService.InvoiceFooterText;
             if (!string.IsNullOrWhiteSpace(footerText))
                 html += "<div style='margin-top:12px;font-size:11px;color:#666;'>" + System.Net.WebUtility.HtmlEncode(footerText) + "</div>";
@@ -488,10 +513,23 @@ tfoot { display: table-footer-group; }
                         var showCustPhone = Services.AppSettingsService.InvoiceShow(AppSettingKeys.InvoiceShowCustomerPhone);
                         var showCustTax = Services.AppSettingsService.InvoiceShow(AppSettingKeys.InvoiceShowCustomerTaxNumber);
                         var showDue = Services.AppSettingsService.InvoiceShow(AppSettingKeys.InvoiceShowDueDate);
+                        // Load logo bytes once for QuestPDF header
+                        byte[]? logoBytesForPdf = null;
+                        if (Services.AppSettingsService.InvoiceShow(AppSettingKeys.InvoiceShowLogo))
+                        {
+                            var logoPath = Services.AppSettingsService.CompanyLogoPath;
+                            if (!string.IsNullOrWhiteSpace(logoPath) && System.IO.File.Exists(logoPath))
+                            {
+                                try { logoBytesForPdf = System.IO.File.ReadAllBytes(logoPath); } catch { }
+                            }
+                        }
+
                         header.Item().Row(row =>
                         {
                             row.RelativeItem().Column(col =>
                             {
+                                if (logoBytesForPdf != null)
+                                    col.Item().MaxHeight(55).MaxWidth(160).Image(logoBytesForPdf);
                                 col.Item().Text((Services.AppSettingsService.CompanyName)).FontSize(11).Bold();
                                 if (showAddr)
                                     col.Item().Text(Services.AppSettingsService.CompanyAddressBlock().Replace("\r\n", "\n")).FontSize(8);
@@ -512,17 +550,20 @@ tfoot { display: table-footer-group; }
                         });
                         if (showBill)
                         {
-                            header.Item().Text($"Bill To: {invoice.Customer?.Name ?? string.Empty}").FontSize(9);
-                            if (showCustAddr && invoice.Customer != null)
+                            var pdfCustName = !string.IsNullOrWhiteSpace(invoice.Customer?.Name) ? invoice.Customer.Name : (invoice.CustomerNameSnapshot ?? string.Empty);
+                            var pdfCustAddr = invoice.Customer != null ? GetCustomerAddressStatic(invoice.Customer) : (invoice.CustomerAddressSnapshot ?? string.Empty);
+                            var pdfCustPhone = !string.IsNullOrWhiteSpace(invoice.Customer?.Phone) ? invoice.Customer.Phone : (invoice.CustomerPhoneSnapshot ?? string.Empty);
+                            var pdfCustTax = !string.IsNullOrWhiteSpace(invoice.Customer?.GstVatNumber) ? invoice.Customer.GstVatNumber : (invoice.CustomerGstSnapshot ?? string.Empty);
+
+                            header.Item().Text($"Bill To: {pdfCustName}").FontSize(9);
+                            if (showCustAddr && !string.IsNullOrWhiteSpace(pdfCustAddr))
                             {
-                                var ca = GetCustomerAddressStatic(invoice.Customer);
-                                if (!string.IsNullOrWhiteSpace(ca))
-                                    header.Item().Text(ca).FontSize(8);
+                                header.Item().Text(pdfCustAddr).FontSize(8);
                             }
-                            if (showCustPhone && !string.IsNullOrWhiteSpace(invoice.Customer?.Phone))
-                                header.Item().Text(invoice.Customer!.Phone).FontSize(8);
-                            if (showCustTax && !string.IsNullOrWhiteSpace(invoice.Customer?.GstVatNumber))
-                                header.Item().Text(invoice.Customer!.GstVatNumber).FontSize(8);
+                            if (showCustPhone && !string.IsNullOrWhiteSpace(pdfCustPhone))
+                                header.Item().Text(pdfCustPhone).FontSize(8);
+                            if (showCustTax && !string.IsNullOrWhiteSpace(pdfCustTax))
+                                header.Item().Text(pdfCustTax).FontSize(8);
                         }
                     });
                     
@@ -672,7 +713,7 @@ tfoot { display: table-footer-group; }
                             if (!string.IsNullOrWhiteSpace(footer))
                                 column.Item().PaddingTop(40).Text(footer).Italic();
                             if (Services.AppSettingsService.InvoiceShow(AppSettingKeys.InvoiceShowSignature))
-                                column.Item().PaddingTop(24).Text("Authorised Signature").FontSize(9);
+                                column.Item().AlignRight().PaddingTop(24).Text("Authorised Signature").FontSize(9);
                         });
                     });
                 });

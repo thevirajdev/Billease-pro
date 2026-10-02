@@ -26,10 +26,12 @@ namespace BillingSuite.App.Forms
         private List<Product> _products;
         private ProductBatch _selectedBatch;
 
-        public DamageEntryForm() : this(null, null) { }
+        public DamageEntryForm() : this(null, null) {
+            Services.FormIconHelper.ApplyIcon(this); }
         
         public DamageEntryForm(Product? preselectProduct = null, ProductBatch? preselectBatch = null)
         {
+            Services.FormIconHelper.ApplyIcon(this);
             Text = "Log Damaged Stock";
             Size = new Size(500, 480);
             StartPosition = FormStartPosition.CenterParent;

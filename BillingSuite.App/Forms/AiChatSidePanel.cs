@@ -25,7 +25,7 @@ namespace BillingSuite.App.Forms
 
         public AiChatSidePanel(bool isFloating = false)
         {
-            _isFloating = isFloating;
+                        _isFloating = isFloating;
             _aiService = new AiAgentService();
             _docProcessor = new AiDocumentProcessor(_aiService);
             

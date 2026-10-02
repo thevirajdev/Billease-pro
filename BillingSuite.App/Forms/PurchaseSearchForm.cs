@@ -22,6 +22,7 @@ namespace BillingSuite.App.Forms
 
         public PurchaseSearchForm()
         {
+            Services.FormIconHelper.ApplyIcon(this);
             Text = "Purchase Product Search";
             StartPosition = FormStartPosition.CenterParent;
             Size = new Size(1200, 700);
@@ -57,8 +58,8 @@ namespace BillingSuite.App.Forms
 
             // Split container for purchases and items
             splitContainer.Dock = DockStyle.Fill;
-            splitContainer.SplitterDistance = 400;
             splitContainer.Orientation = Orientation.Horizontal;
+            try { splitContainer.SplitterDistance = 400; } catch { }
 
             // Purchases grid (top)
             gridPurchases.Dock = DockStyle.Fill;

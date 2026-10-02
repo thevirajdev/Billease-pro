@@ -68,9 +68,18 @@ public partial class Form1 : Form
     private TabPage? tabHelpManual;
     private AiChatSidePanel? aiPanel;
     private ReportsForm? reportsForm;
-    public Form1()
+    private NotifyIcon? _trayIcon;
+    private ContextMenuStrip? _trayMenu;
+    private bool _reallyClose = false;
+
+    private readonly bool _startMinimized;
+
+    public Form1(bool startMinimized = false)
     {
+        _startMinimized = startMinimized;
         InitializeComponent();
+        FormIconHelper.ApplyIconMain(this);
+        SetupSystemTray();
         
         // Launch Floating Assistant
         try { new AiFloatingAssistant().Show(); } catch { }
@@ -80,12 +89,157 @@ public partial class Form1 : Form
         try { InitializeProductsGridIfNeeded(); } catch { }
         try { if (tabControl1 != null) tabControl1.SelectedIndexChanged += TabControl1_SelectedIndexChanged; } catch { }
         try { EnsureExtraTabs(); } catch { }
+
+        // Wire 24/7 background sync completion to silent, smooth UI refresh without lag
+        SyncService.SyncCompleted += () =>
+        {
+            try
+            {
+                if (!IsDisposed)
+                {
+                    Action refresh = () =>
+                    {
+                        try
+                        {
+                            var active = tabControl1?.SelectedTab;
+                            if (active == tabInvoices || active == null)
+                            {
+                                int? selId = GetSelectedInvoiceId();
+                                LoadInvoices(txtInvoiceSearch?.Text);
+                                if (selId.HasValue && gridInvoices != null)
+                                {
+                                    foreach (DataGridViewRow r in gridInvoices.Rows)
+                                    {
+                                        if (r.Cells["Id"]?.Value is int id && id == selId.Value)
+                                        {
+                                            r.Selected = true;
+                                            try { gridInvoices.CurrentCell = r.Cells[1] ?? r.Cells[0]; } catch { }
+                                            break;
+                                        }
+                                    }
+                                }
+                            }
+                            else if (active == tabProducts)
+                            {
+                                LoadProductsGrid();
+                            }
+                            else if (active == tabCustomers)
+                            {
+                                LoadCustomers();
+                            }
+                            else if (active == tabPurchases)
+                            {
+                                BuildPurchasesHomeUi();
+                            }
+                            else if (active == tabSuppliers)
+                            {
+                                BuildSuppliersHomeUi();
+                            }
+                            else if (active == tabAlerts)
+                            {
+                                LoadAlerts();
+                            }
+                        }
+                        catch { }
+                    };
+
+                    if (InvokeRequired)
+                    {
+                        BeginInvoke(refresh);
+                    }
+                    else
+                    {
+                        refresh();
+                    }
+                }
+            }
+            catch { }
+        };
+
+        if (startMinimized)
+        {
+            this.WindowState = FormWindowState.Minimized;
+            this.ShowInTaskbar = false;
+        }
+    }
+
+    private void SetupSystemTray()
+    {
+        try
+        {
+            _trayMenu = new ContextMenuStrip();
+            _trayMenu.Items.Add("💻 Open Billease Pro", null, (s, e) => { Show(); WindowState = FormWindowState.Normal; ShowInTaskbar = true; BringToFront(); });
+            _trayMenu.Items.Add("🔄 Sync Now", null, async (s, e) => { await SyncService.SyncNowAsync(); });
+            _trayMenu.Items.Add("-");
+            _trayMenu.Items.Add("❌ Exit Application", null, (s, e) => { _reallyClose = true; Application.Exit(); });
+
+            _trayIcon = new NotifyIcon
+            {
+                Icon = FormIconHelper.GetAppIcon() ?? SystemIcons.Application,
+                Text = "Billease Pro - 24/7 Cloud Sync Active",
+                ContextMenuStrip = _trayMenu,
+                Visible = true
+            };
+            _trayIcon.DoubleClick += (s, e) => { Show(); WindowState = FormWindowState.Normal; ShowInTaskbar = true; BringToFront(); };
+        }
+        catch { }
+    }
+    public const string SingleInstanceMessage = "BILLEASE_PRO_SHOW_MAIN_WINDOW_MSG";
+    public static readonly int WmShowBillease = RegisterWindowMessage(SingleInstanceMessage);
+
+    [System.Runtime.InteropServices.DllImport("user32.dll", SetLastError = true, CharSet = System.Runtime.InteropServices.CharSet.Auto)]
+    public static extern int RegisterWindowMessage(string lpString);
+
+    protected override void WndProc(ref Message m)
+    {
+        if (m.Msg == WmShowBillease && WmShowBillease != 0)
+        {
+            Show();
+            WindowState = FormWindowState.Normal;
+            ShowInTaskbar = true;
+            BringToFront();
+            Activate();
+            return;
+        }
+        base.WndProc(ref m);
+    }
+
+    protected override void OnFormClosing(FormClosingEventArgs e)
+    {
+        try { _trayIcon?.Dispose(); } catch { }
+        base.OnFormClosing(e);
+    }
+
+    protected override void OnFormClosed(FormClosedEventArgs e)
+    {
+        base.OnFormClosed(e);
+
+        // Ensure lightweight 24/7 background sync service runs even after the main UI is closed
+        if (AppSettingsService.SyncEnabled)
+        {
+            try
+            {
+                var exe = Environment.ProcessPath ?? Application.ExecutablePath;
+                System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+                {
+                    FileName = exe,
+                    Arguments = "--sync-service",
+                    UseShellExecute = true,
+                    CreateNoWindow = true
+                });
+            }
+            catch { }
+        }
     }
 
     protected override void OnLoad(EventArgs e)
     {
         base.OnLoad(e);
         try { UpdateWindowTitle(); } catch { }
+        if (_startMinimized)
+        {
+            Hide();
+        }
     }
 
     // ================= Alerts Tab =================
@@ -1247,6 +1401,18 @@ public partial class Form1 : Form
         catch { }
     }
 
+    public void SelectDashboardTab()
+    {
+        try
+        {
+            if (tabControl1 != null && tabControl1.TabPages.Count > 0)
+            {
+                tabControl1.SelectedIndex = 0;
+            }
+        }
+        catch { }
+    }
+
     private void btnSettings_Click(object? sender, EventArgs e)
     {
         if (tabControl1 != null && tabSettings != null)
@@ -1276,10 +1442,10 @@ public partial class Form1 : Form
         using var login = new Forms.LoginForm(firstRun: false);
         if (login.ShowDialog() == DialogResult.OK)
         {
-            // User signed back in — refresh the window and show it again.
-            AppSettingsService.Invalidate();
-            UpdateWindowTitle();
+            // User signed back in — refresh all grids, title, and sync session
+            OnUserSessionChanged();
             this.Show();
+            this.BringToFront();
         }
         else
         {
@@ -1289,9 +1455,53 @@ public partial class Form1 : Form
     }
 
     /// <summary>
+    /// Refreshes company settings, window title, and all business data grids when
+    /// the active user switches or login session changes.
+    /// </summary>
+    public void OnUserSessionChanged()
+    {
+        try
+        {
+            AppSettingsService.Invalidate();
+            UpdateWindowTitle();
+
+            // Refresh all visible data grids for the newly active account
+            try { LoadInvoices(); } catch { }
+            try { LoadCustomers(); } catch { }
+            try { LoadProductsGrid(); } catch { }
+            try { LoadAlerts(); } catch { }
+            try { if (tabPurchases?.Tag is Action loadPurchases) loadPurchases(); } catch { }
+
+            // Refresh embedded tabs if currently loaded
+            try
+            {
+                if (tabExpenses != null && tabExpenses.Controls.Count > 0)
+                    EmbedExpensesForm();
+                if (tabSuppliers != null && tabSuppliers.Controls.Count > 0)
+                    EmbedSuppliersForm();
+                if (tabReports != null && tabReports.Controls.Count > 0)
+                    EmbedReportsForm();
+                if (tabSettings != null && tabSettings.Controls.Count > 0)
+                    EmbedSettingsForm();
+            }
+            catch { }
+
+            // Trigger silent cloud sync for newly logged-in user
+            if (AppSettingsService.SyncEnabled)
+            {
+                _ = Task.Run(async () =>
+                {
+                    try { await SyncService.SyncNowAsync(silent: true); } catch { }
+                });
+            }
+        }
+        catch { }
+    }
+
+    /// <summary>
     /// Updates the main window title to show the signed-in user's email and company name.
     /// </summary>
-    private void UpdateWindowTitle()
+    public void UpdateWindowTitle()
     {
         var company = AppSettingsService.CompanyName;
         var user = AuthService.CurrentUser?.Email;
@@ -3584,7 +3794,8 @@ public partial class Form1 : Form
             {
                 var s = search.Trim().ToLower();
                 q = q.Where(i => i.InvoiceNumber.ToLower().Contains(s)
-                              || (i.Customer != null && i.Customer.Name != null && i.Customer.Name.ToLower().Contains(s)));
+                              || (i.Customer != null && i.Customer.Name != null && i.Customer.Name.ToLower().Contains(s))
+                              || (i.CustomerNameSnapshot != null && i.CustomerNameSnapshot.ToLower().Contains(s)));
             }
             var data = q
                 .OrderByDescending(i => i.InvoiceDate)
@@ -3595,7 +3806,7 @@ public partial class Form1 : Form
                     i.InvoiceNumber,
                     i.InvoiceDate,
                     i.DueDate,
-                    Customer = i.Customer != null ? i.Customer.Name : "",
+                    Customer = i.Customer != null ? i.Customer.Name : (i.CustomerNameSnapshot ?? ""),
                     Status = i.Status.ToString(),
                     BillAmt = i.Total - i.BackDues,
                     i.BackDues,
@@ -3698,7 +3909,7 @@ public partial class Form1 : Form
         splitInvoices = new SplitContainer { Dock = DockStyle.Fill, Orientation = Orientation.Horizontal, Margin = new Padding(0) };
         splitInvoices.Panel1MinSize = 220;
         splitInvoices.SplitterWidth = 5;
-        splitInvoices.SplitterDistance = Math.Max(220, (int)(tabInvoices.Height * 0.6));
+        SafeSetSplitterDistance(splitInvoices, Math.Max(220, (int)(tabInvoices.Height * 0.6)));
         // move grid to top panel using a table layout to avoid overlap/clipping
         splitInvoices.Panel1.Margin = new Padding(0);
         splitInvoices.Panel1.Padding = new Padding(0);
@@ -3759,8 +3970,8 @@ public partial class Form1 : Form
         this.KeyDown += Form1_InvoicesShortcuts;
         splitInvoices.Resize += (s, e) => 
         {
-            var minTop = 220;
-            if (splitInvoices.SplitterDistance < minTop) splitInvoices.SplitterDistance = minTop;
+            if (splitInvoices == null || splitInvoices.IsDisposed || splitInvoices.Height <= 0) return;
+            SafeSetSplitterDistance(splitInvoices, Math.Max(220, splitInvoices.SplitterDistance));
         };
 
         // bottom tabs
@@ -3825,6 +4036,23 @@ public partial class Form1 : Form
         gridInvItems.DataSource = itemRows;
         gridInvPayments.DataSource = inv.Payments.Select(p => new { Date = p.Date.ToString("MM/dd/yyyy"), p.Method, p.Amount }).ToList();
         if (txtInvPrivateNotes != null) txtInvPrivateNotes.Text = inv.PrivateNotes ?? string.Empty;
+    }
+
+    private static void SafeSetSplitterDistance(SplitContainer? split, int desiredDistance)
+    {
+        if (split == null || split.IsDisposed) return;
+        try
+        {
+            int total = split.Orientation == Orientation.Horizontal ? split.Height : split.Width;
+            int min = Math.Max(0, split.Panel1MinSize);
+            int max = total - Math.Max(0, split.Panel2MinSize) - split.SplitterWidth;
+            if (max > min && total > 0)
+            {
+                int target = Math.Clamp(desiredDistance, min, max);
+                split.SplitterDistance = target;
+            }
+        }
+        catch { /* Ignore layout timing exceptions during init/resize */ }
     }
 
     private string GenerateInvoicePdfFile(BillingSuite.App.Models.Invoice inv)

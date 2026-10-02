@@ -20,10 +20,46 @@ namespace BillingSuite.App.Services
         private static readonly HttpClient _httpClient = new() { Timeout = TimeSpan.FromSeconds(30) };
         private static bool _isSyncing = false;
 
+        /// <summary>
+        /// Set to true while PullFromCloudAsync is running to prevent QueueInstantSync
+        /// from firing a concurrent sync that would cause UNIQUE constraint violations.
+        /// </summary>
+        internal static volatile bool _isPulling = false;
+
         public static string LastStatus { get; private set; } = "Not started";
+        public static int CurrentProgressPercent { get; private set; } = 0;
         public static DateTime? LastSuccessfulSync { get; private set; }
 
         public static event Action<string>? StatusChanged;
+        public static event Action? SyncCompleted;
+
+        private static System.Threading.Timer? _instantSyncDebounceTimer;
+        private static readonly object _debounceLock = new();
+
+        /// <summary>
+        /// Debounces and triggers background sync within 1.5 seconds of local business changes.
+        /// </summary>
+        public static void QueueInstantSync(int delayMs = 1500)
+        {
+            if (_isSyncing || _isPulling || !AppSettingsService.SyncEnabled) return;
+
+            lock (_debounceLock)
+            {
+                _instantSyncDebounceTimer?.Dispose();
+                _instantSyncDebounceTimer = new System.Threading.Timer(async _ =>
+                {
+                    if (AppSettingsService.SyncEnabled && !_isSyncing)
+                    {
+                        await SyncNowAsync(silent: true);
+                    }
+                }, null, delayMs, System.Threading.Timeout.Infinite);
+            }
+        }
+
+        public static void NotifySyncCompleted()
+        {
+            try { SyncCompleted?.Invoke(); } catch { }
+        }
 
         /// <summary>
         /// Starts the background sync worker. Safe to call on startup.
@@ -32,17 +68,30 @@ namespace BillingSuite.App.Services
         {
             if (_syncTimer != null) return;
 
-            int intervalMinutes = Math.Max(1, AppSettingsService.SyncIntervalMinutes);
+            int intervalMinutes = Math.Max(5, AppSettingsService.SyncIntervalMinutes);
             var period = TimeSpan.FromMinutes(intervalMinutes);
 
-            // Fire first sync after 15 seconds, then repeat periodically
+            // Fire first sync after 10 seconds, then repeat periodically
             _syncTimer = new System.Threading.Timer(async _ =>
             {
                 if (AppSettingsService.SyncEnabled)
                 {
                     await SyncNowAsync(silent: true);
                 }
-            }, null, TimeSpan.FromSeconds(15), period);
+            }, null, TimeSpan.FromSeconds(10), period);
+
+            // Listen for network connectivity restored (immediate sync upon reconnect)
+            try
+            {
+                NetworkChange.NetworkAvailabilityChanged += (s, e) =>
+                {
+                    if (e.IsAvailable && AppSettingsService.SyncEnabled && !_isSyncing && !_isPulling)
+                    {
+                        _ = SyncNowAsync(silent: true);
+                    }
+                };
+            }
+            catch { }
         }
 
         /// <summary>
@@ -51,7 +100,7 @@ namespace BillingSuite.App.Services
         public static void UpdateInterval(int minutes)
         {
             if (_syncTimer == null) return;
-            int interval = Math.Max(1, minutes);
+            int interval = Math.Max(5, minutes);
             _syncTimer.Change(TimeSpan.FromMinutes(interval), TimeSpan.FromMinutes(interval));
         }
 
@@ -75,19 +124,23 @@ namespace BillingSuite.App.Services
         /// If offline, logs the state and pauses gracefully without errors.
         /// If online and server is configured, packages the user database snapshot and synchronizes.
         /// </summary>
-        public static async Task<(bool Success, string Message)> SyncNowAsync(bool silent = false)
+        public static async Task<(bool Success, string Message)> SyncNowAsync(bool silent = false, bool forceFull = false)
         {
-            if (_isSyncing) return (false, "Sync is already in progress.");
+            if (_isSyncing)
+            {
+                var activeMsg = $"Cloud sync is actively running in background ({CurrentProgressPercent}%): {LastStatus}";
+                return (true, activeMsg);
+            }
 
             _isSyncing = true;
-            UpdateStatus("Checking network connection...");
+            UpdateStatus("Checking network connection...", 5);
 
             try
             {
                 if (!IsNetworkAvailable())
                 {
                     var offlineMsg = "Offline: Waiting for internet connection.";
-                    UpdateStatus(offlineMsg);
+                    UpdateStatus(offlineMsg, 0);
                     return (false, offlineMsg);
                 }
 
@@ -97,21 +150,80 @@ namespace BillingSuite.App.Services
 
                 if (!string.IsNullOrWhiteSpace(connStr))
                 {
-                    UpdateStatus("Connecting to online cloud database...");
-                    var (onlineOk, onlineMsg) = await OnlineDatabaseService.PushToCloudAsync(connStr, AuthService.CurrentUser?.Id);
-                    if (onlineOk)
+                    bool isPendingRestorePush = AppSettingsService.GetBool("RestoreBackupForceCloudPush", false);
+                    if (isPendingRestorePush)
+                    {
+                        // User restored from a local backup: PUSH restored database to cloud first!
+                        // This prevents old corrupted cloud data from overwriting the user's restored backup.
+                        UpdateStatus("Synchronizing restored backup to cloud (Overwrite Protection)...", 20);
+                        var (pushRestoreOk, pushRestoreMsg) = await OnlineDatabaseService.PushToCloudAsync(connStr, AuthService.CurrentUser?.Id, (status, pct) =>
+                        {
+                            UpdateStatus($"[Restore Push] {status}", 20 + (int)(pct * 0.7));
+                        });
+                        if (pushRestoreOk)
+                        {
+                            AppSettingsService.Set("RestoreBackupForceCloudPush", "false");
+                            var nowRestore = DateTime.UtcNow;
+                            LastSuccessfulSync = nowRestore;
+                            AppSettingsService.Set(AppSettingKeys.LastSyncAtUtc, nowRestore.ToString("o"));
+                            var localTime = DateTime.Now.ToString("dd-MMM-yyyy hh:mm tt");
+                            var msg = $"Restored backup successfully pushed to cloud at {localTime}.";
+                            UpdateStatus(msg, 100);
+                            NotifySyncCompleted();
+                            return (true, msg);
+                        }
+                    }
+
+                    // Calculate since timestamp for delta sync to eliminate bandwidth overuse
+                    DateTime? sinceUtc = null;
+                    if (!forceFull)
+                    {
+                        sinceUtc = LastSuccessfulSync;
+                        if (!sinceUtc.HasValue)
+                        {
+                            var storedLastSync = AppSettingsService.GetString(AppSettingKeys.LastSyncAtUtc);
+                            if (!string.IsNullOrWhiteSpace(storedLastSync) && DateTime.TryParse(storedLastSync, null, System.Globalization.DateTimeStyles.RoundtripKind, out var parsed))
+                            {
+                                sinceUtc = parsed.ToUniversalTime();
+                            }
+                        }
+                    }
+
+                    // 1. Pull latest cloud updates from other devices into local SQLite (delta)
+                    UpdateStatus("Pulling latest cloud changes from other devices (1/2)...", 10);
+                    var (pullOk, pullMsg) = await OnlineDatabaseService.PullFromCloudAsync(connStr, AuthService.CurrentUser?.Id, (status, pct) =>
+                    {
+                        UpdateStatus($"[1/2 Pull] {status}", 10 + (int)(pct * 0.45));
+                    }, sinceUtc: sinceUtc);
+
+                    if (!pullOk)
+                    {
+                        UpdateStatus($"Cloud pull notice: {pullMsg}", 50);
+                    }
+
+                    // 2. Push local device updates to cloud database (delta)
+                    UpdateStatus("Pushing local business updates to cloud (2/2)...", 55);
+                    var (pushOk, pushMsg) = await OnlineDatabaseService.PushToCloudAsync(connStr, AuthService.CurrentUser?.Id, (status, pct) =>
+                    {
+                        UpdateStatus($"[2/2 Push] {status}", 55 + (int)(pct * 0.45));
+                    }, sinceUtc: sinceUtc);
+
+                    if (pushOk)
                     {
                         var now = DateTime.UtcNow;
                         LastSuccessfulSync = now;
                         AppSettingsService.Set(AppSettingKeys.LastSyncAtUtc, now.ToString("o"));
-                        var successMsg = $"Synced successfully to cloud database at {DateTime.Now:HH:mm:ss}";
-                        UpdateStatus(successMsg);
+                        var localTimeStr = DateTime.Now.ToString("dd-MMM-yyyy hh:mm tt");
+                        var deviceName = Environment.MachineName;
+                        var successMsg = $"24/7 Multi-Device Cloud Sync active ({deviceName}). All records synchronized at {localTimeStr}.";
+                        UpdateStatus(successMsg, 100);
+                        NotifySyncCompleted();
                         return (true, successMsg);
                     }
                     else
                     {
-                        UpdateStatus(onlineMsg);
-                        return (false, onlineMsg);
+                        UpdateStatus(pushMsg, 0);
+                        return (false, pushMsg);
                     }
                 }
 
@@ -134,7 +246,8 @@ namespace BillingSuite.App.Services
 
                 using (var db = new Data.AppDbContext())
                 {
-                    db.Database.ExecuteSqlRaw($"VACUUM INTO '{snapshotFile}'");
+                    string vacuumSql = "VACUUM INTO '" + snapshotFile.Replace("'", "''") + "'";
+                    db.Database.ExecuteSqlRaw(vacuumSql);
                 }
 
                 UpdateStatus("Synchronizing with remote server...");
@@ -221,11 +334,25 @@ namespace BillingSuite.App.Services
         {
             try
             {
+                // If the main UI window is already running, skip headless sync to prevent duplicate work and egress
+                var currentProc = System.Diagnostics.Process.GetCurrentProcess();
+                var runningProcs = System.Diagnostics.Process.GetProcessesByName(currentProc.ProcessName);
+                foreach (var p in runningProcs)
+                {
+                    if (p.Id != currentProc.Id && p.MainWindowHandle != IntPtr.Zero)
+                    {
+                        return;
+                    }
+                }
+
                 DbInitializer.EnsureCreatedAndSeed();
                 AppSettingsService.SeedDefaults();
 
                 if (!AppSettingsService.SyncEnabled) return;
                 if (!IsNetworkAvailable()) return;
+
+                // Load active user session so user-specific records sync properly
+                AuthService.TryAutoLogin();
 
                 SyncNowAsync(silent: true).GetAwaiter().GetResult();
             }
@@ -279,9 +406,10 @@ namespace BillingSuite.App.Services
             }
         }
 
-        private static void UpdateStatus(string status)
+        private static void UpdateStatus(string status, int percent = -1)
         {
             LastStatus = status;
+            if (percent >= 0) CurrentProgressPercent = Math.Clamp(percent, 0, 100);
             try
             {
                 StatusChanged?.Invoke(status);

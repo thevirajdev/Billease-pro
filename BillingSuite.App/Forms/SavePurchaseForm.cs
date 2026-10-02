@@ -53,6 +53,7 @@ namespace BillingSuite.App.Forms
 
         public SavePurchaseForm(int? presetSupplierId = null)
         {
+            Services.FormIconHelper.ApplyIcon(this);
             Text = "Save Purchase";
             StartPosition = FormStartPosition.CenterParent;
             var wa = Screen.FromHandle(this.Handle).WorkingArea;

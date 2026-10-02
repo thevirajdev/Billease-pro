@@ -18,7 +18,7 @@ namespace BillingSuite.App.Models
     {
         public int Id { get; set; }
         public int? OwnerUserId { get; set; }
-        public string InvoiceNumber { get; set; } = string.Empty;
+        public string? InvoiceNumber { get; set; } = string.Empty;
         public DateTime InvoiceDate { get; set; } = DateTime.Today;
         public DateTime? DueDate { get; set; }
         public int? CustomerId { get; set; }
