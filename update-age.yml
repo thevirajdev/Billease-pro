@@ -1,0 +1,52 @@
+name: Auto Update Age
+
+on:
+  schedule:
+    # Runs daily at midnight UTC
+    - cron: '0 0 * * *'
+  workflow_dispatch: # Allows manual run button anytime
+
+permissions:
+  contents: write
+
+jobs:
+  update-age:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Calculate Age from DOB
+        run: |
+          python -c '
+          from datetime import date
+          import re
+
+          born = date(2009, 1, 12)
+          today = date.today()
+          age = today.year - born.year - ((today.month, today.day) < (born.month, born.day))
+
+          with open("README.md", "r", encoding="utf-8") as f:
+              content = f.read()
+
+          # 1. Update age in YAML block (e.g. "age        : 17")
+          content = re.sub(r"age\s*:\s*\d+", f"age        : {age}", content)
+
+          # 2. Update age in Typing SVG banner (e.g. "17+y%2Fo+")
+          content = re.sub(r"lines=\d+\+y%2Fo\+", f"lines={age}+y%2Fo+", content)
+
+          with open("README.md", "w", encoding="utf-8") as f:
+              f.write(content)
+          '
+
+      - name: Commit and Push if Changed
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git add README.md
+          if git diff --staged --quiet; then
+            echo "Age is already up-to-date. No commit needed."
+          else
+            git commit -m "chore(profile): auto-update age"
+            git push
+          fi

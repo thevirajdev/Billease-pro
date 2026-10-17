@@ -25,6 +25,12 @@ SetupIconFile=BillingSuite.App\billease.ico
 UninstallDisplayIcon={app}\{#MyAppExeName}
 DisableProgramGroupPage=auto
 
+; Auto-close running application and background sync before install/update
+AppMutex=Global\BilleasePro_App_SingleInstance_Mutex_99938A2D,Global\BilleasePro_SyncService_Mutex_482D1C90
+CloseApplications=yes
+CloseApplicationsFilter=BillingSuite.App.exe
+RestartApplications=yes
+
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"
 
@@ -45,3 +51,30 @@ Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: 
 
 [Run]
 Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,{#StringChange(MyAppName, '&', '&&')}}"; Flags: nowait postinstall skipifsilent
+
+[Code]
+procedure KillAppProcess();
+var
+  ResultCode: Integer;
+begin
+  Exec('taskkill.exe', '/f /im BillingSuite.App.exe', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+  Sleep(300);
+end;
+
+function InitializeSetup(): Boolean;
+begin
+  KillAppProcess();
+  Result := True;
+end;
+
+function PrepareToInstall(var NeedsRestart: Boolean): String;
+begin
+  KillAppProcess();
+  Result := '';
+end;
+
+function InitializeUninstall(): Boolean;
+begin
+  KillAppProcess();
+  Result := True;
+end;

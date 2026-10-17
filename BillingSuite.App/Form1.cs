@@ -3781,6 +3781,16 @@ public partial class Form1 : Form
         try
         {
             if (gridInvoices == null) return;
+
+            int? targetId = GetSelectedInvoiceId();
+            int topIndex = -1;
+            try
+            {
+                if (gridInvoices.Rows.Count > 0)
+                    topIndex = gridInvoices.FirstDisplayedScrollingRowIndex;
+            }
+            catch { }
+
             using var db = new AppDbContext();
             var q = db.Invoices.AsNoTracking().AsQueryable();
             // date filter
@@ -3835,7 +3845,36 @@ public partial class Form1 : Form
             var sumBal = data.Sum(x => (decimal)x.Balance);
             if (lblInvCount != null) lblInvCount.Text = $"{count} Invoice(s)";
             if (lblInvTotals != null) lblInvTotals.Text = $"Fresh Sale Total {sumBill:0.00}    Total Paid {sumPaid:0.00}    Final Balance {sumBal:0.00}";
-            EnsureInvoicesGridTopVisible();
+
+            // Restore scroll position and selected row smoothly
+            if (gridInvoices.Rows.Count > 0)
+            {
+                DataGridViewRow? targetRow = null;
+                if (targetId.HasValue)
+                {
+                    foreach (DataGridViewRow r in gridInvoices.Rows)
+                    {
+                        if (r.Cells["Id"]?.Value is int id && id == targetId.Value)
+                        {
+                            targetRow = r;
+                            break;
+                        }
+                    }
+                }
+
+                if (targetRow != null)
+                {
+                    gridInvoices.ClearSelection();
+                    targetRow.Selected = true;
+                    try { gridInvoices.CurrentCell = targetRow.Cells[1] ?? targetRow.Cells[0]; } catch { }
+                }
+
+                if (topIndex >= 0 && topIndex < gridInvoices.Rows.Count)
+                {
+                    try { gridInvoices.FirstDisplayedScrollingRowIndex = topIndex; } catch { }
+                }
+            }
+
             LoadInvoiceDetailsFromSelection();
         }
         catch (Exception ex)
@@ -3944,8 +3983,8 @@ public partial class Form1 : Form
         tlpTop.Controls.Add(pnlInvTotals, 0, 1);
         splitInvoices.Panel1.Controls.Add(tlpTop);
         gridInvoices.SelectionChanged += (s,e)=> LoadInvoiceDetailsFromSelection();
-        gridInvoices.DataBindingComplete += (s,e)=> { ApplyInvoicesGridColumnLayout(); EnsureInvoicesGridTopVisible(); };
-        gridInvoices.Resize += (s,e)=> EnsureInvoicesGridTopVisible();
+        gridInvoices.DataBindingComplete += (s,e)=> { ApplyInvoicesGridColumnLayout(); };
+        gridInvoices.Resize += (s,e)=> { ApplyInvoicesGridColumnLayout(); };
         // double-click to edit
         gridInvoices.CellDoubleClick += (s,e)=> { if (e.RowIndex >= 0) btnInvoiceEdit_Click(this, EventArgs.Empty); };
         // context menu

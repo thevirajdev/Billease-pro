@@ -212,6 +212,7 @@ namespace BillingSuite.App.Forms
         private CheckBox chkDiscountPercent = new CheckBox();
         private CheckBox chkBackDuesAdj = new CheckBox();
         private bool suppressBackDuesEvent = false;
+        private bool paymentsModified = false;
         private DataGridView paymentsGrid = new DataGridView();
         private ContextMenuStrip paymentsMenu = new ContextMenuStrip();
         private Panel paymentsPanel = new Panel();
@@ -2076,7 +2077,23 @@ namespace BillingSuite.App.Forms
             }
             catch { }
             // Refresh model monetary state
-            var paidNow = Model.Payments?.Sum(p => p.Amount) ?? Model.TotalPaid;
+            decimal paidNow;
+            if (paymentsModified)
+            {
+                paidNow = Model.Payments?.Sum(p => p.Amount) ?? 0m;
+            }
+            else if (Model.Payments != null && Model.Payments.Count > 0)
+            {
+                paidNow = Model.Payments.Sum(p => p.Amount);
+            }
+            else if (Model.Status == InvoiceStatus.Paid || markPaidOnSave)
+            {
+                paidNow = Model.TotalPaid > 0 ? Model.TotalPaid : roundedTotal;
+            }
+            else
+            {
+                paidNow = Model.TotalPaid;
+            }
             Model.TotalPaid = paidNow;
             Model.Total = roundedTotal;
             var balanceNow = roundedTotal - paidNow;
@@ -2139,7 +2156,11 @@ namespace BillingSuite.App.Forms
             {
                 lblStatus.Text = "Status: Void";
             }
-            else if (paidNow >= Model.Total)
+            else if (markPaidOnSave)
+            {
+                lblStatus.Text = "Status: Paid (will mark on save)";
+            }
+            else if (paidNow >= Model.Total && Model.Total > 0)
             {
                 Model.Status = InvoiceStatus.Paid;
                 lblStatus.Text = "Status: Paid";
@@ -2148,6 +2169,10 @@ namespace BillingSuite.App.Forms
             {
                 Model.Status = InvoiceStatus.Partial;
                 lblStatus.Text = "Status: Partial";
+            }
+            else if (!paymentsModified && Model.Status == InvoiceStatus.Paid)
+            {
+                lblStatus.Text = "Status: Paid";
             }
             else if (dtDue.Value.Date < DateTime.Today)
             {
@@ -2399,13 +2424,39 @@ namespace BillingSuite.App.Forms
             Model.Total = rounded2;
             Model.BackDues = backDuesAmount;
             // Re-evaluate status based on payments
-            Model.TotalPaid = Model.Payments?.Sum(p => p.Amount) ?? 0m;
-            if (Model.TotalPaid >= Model.Total)
-                Model.Status = InvoiceStatus.Paid;
-            else if (Model.TotalPaid > 0)
-                Model.Status = InvoiceStatus.Partial;
-            else
-                Model.Status = InvoiceStatus.Unpaid;
+            if (paymentsModified)
+            {
+                Model.TotalPaid = Model.Payments?.Sum(p => p.Amount) ?? 0m;
+            }
+            else if (Model.Payments != null && Model.Payments.Count > 0)
+            {
+                Model.TotalPaid = Model.Payments.Sum(p => p.Amount);
+            }
+            else if (Model.Status == InvoiceStatus.Paid || markPaidOnSave)
+            {
+                Model.TotalPaid = Model.TotalPaid > 0 ? Model.TotalPaid : Model.Total;
+            }
+
+            if (Model.Status != InvoiceStatus.Void)
+            {
+                if (markPaidOnSave || (Model.TotalPaid >= Model.Total && Model.Total > 0))
+                {
+                    Model.Status = InvoiceStatus.Paid;
+                }
+                else if (Model.TotalPaid > 0)
+                {
+                    Model.Status = InvoiceStatus.Partial;
+                }
+                else if (!paymentsModified && Model.Status == InvoiceStatus.Paid)
+                {
+                    Model.TotalPaid = Model.Total;
+                    Model.Status = InvoiceStatus.Paid;
+                }
+                else
+                {
+                    Model.Status = InvoiceStatus.Unpaid;
+                }
+            }
 
             // Handle Back Dues explicitly (always unsettled first, then settled if included)
             try
@@ -2708,6 +2759,7 @@ namespace BillingSuite.App.Forms
                 using var pd = new PaymentDialog();
                 if (pd.ShowDialog(this) == DialogResult.OK)
                 {
+                    paymentsModified = true;
                     if (Model.Payments == null) Model.Payments = new System.Collections.Generic.List<Payment>();
                     Model.Payments.Add(new Payment { Date = DateTime.Today, Method = pd.Method, Amount = pd.Amount, Notes = pd.Notes });
                     Model.TotalPaid = Model.Payments.Sum(p => p.Amount);
@@ -2747,6 +2799,7 @@ namespace BillingSuite.App.Forms
                 f.AcceptButton = ok; f.CancelButton = cancel;
                 if (f.ShowDialog(this) == DialogResult.OK)
                 {
+                    paymentsModified = true;
                     pay.Amount = numAmt.Value;
                     pay.Method = cmb.SelectedItem?.ToString() ?? pay.Method;
                     pay.Notes = txt.Text;
@@ -2770,6 +2823,7 @@ namespace BillingSuite.App.Forms
                 if (idx < 0 || idx >= Model.Payments.Count) return;
                 if (MessageBox.Show("Delete selected payment?", "Confirm", MessageBoxButtons.YesNo, MessageBoxIcon.Question) == DialogResult.Yes)
                 {
+                    paymentsModified = true;
                     Model.Payments.RemoveAt(idx);
                     Model.TotalPaid = Model.Payments.Sum(p => p.Amount);
                     UpdatePaymentsGrid();

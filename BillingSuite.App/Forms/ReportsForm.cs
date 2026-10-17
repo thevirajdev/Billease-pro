@@ -725,10 +725,22 @@ namespace BillingSuite.App.Forms
                 var invoices = db.Invoices.Include(i => i.Payments).ToList();
                 foreach (var inv in invoices)
                 {
-                    inv.TotalPaid = inv.Payments?.Sum(p => p.Amount) ?? 0m;
-                    if (inv.TotalPaid >= inv.Total) inv.Status = InvoiceStatus.Paid;
-                    else if (inv.TotalPaid > 0) inv.Status = InvoiceStatus.Partial;
-                    else inv.Status = InvoiceStatus.Unpaid;
+                    if (inv.Payments != null && inv.Payments.Count > 0)
+                    {
+                        inv.TotalPaid = inv.Payments.Sum(p => p.Amount);
+                    }
+                    else if (inv.Status == InvoiceStatus.Paid)
+                    {
+                        inv.TotalPaid = inv.TotalPaid > 0 ? inv.TotalPaid : inv.Total;
+                    }
+
+                    if (inv.Status != InvoiceStatus.Void)
+                    {
+                        if (inv.TotalPaid >= inv.Total && inv.Total > 0) inv.Status = InvoiceStatus.Paid;
+                        else if (inv.TotalPaid > 0) inv.Status = InvoiceStatus.Partial;
+                        else if (inv.Status == InvoiceStatus.Paid) inv.Status = InvoiceStatus.Paid;
+                        else inv.Status = InvoiceStatus.Unpaid;
+                    }
                 }
                 db.SaveChanges();
 

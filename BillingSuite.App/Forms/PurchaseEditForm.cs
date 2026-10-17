@@ -1435,7 +1435,14 @@ namespace BillingSuite.App.Forms
                         paymentsGrid.DataSource = null;
                         paymentsGrid.DataSource = pays;
                     }
-                    totalPaid = pays.Sum(x => x.Amount);
+                    if (pays.Count > 0)
+                    {
+                        totalPaid = pays.Sum(x => x.Amount);
+                    }
+                    else if (Model != null && Model.Paid.HasValue && Model.Paid.Value > 0)
+                    {
+                        totalPaid = Model.Paid.Value;
+                    }
                 }
                 var subtotal = 0m;
                 foreach (DataGridViewRow row in gridItems.Rows)
