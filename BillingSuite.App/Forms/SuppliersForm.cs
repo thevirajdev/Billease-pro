@@ -123,7 +123,7 @@ namespace BillingSuite.App.Forms
         private void StartNewPurchaseForSelected()
         {
             var id = GetSelectedSupplierId();
-            using var dlg = new SavePurchaseForm(id);
+            using var dlg = new PurchaseEditForm(null, id);
             dlg.ShowDialog(this);
             Reload();
         }

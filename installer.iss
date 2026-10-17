@@ -24,6 +24,8 @@ WizardStyle=modern
 SetupIconFile=BillingSuite.App\billease.ico
 UninstallDisplayIcon={app}\{#MyAppExeName}
 DisableProgramGroupPage=auto
+PrivilegesRequired=admin
+UsedUserAreasWarning=no
 
 ; Auto-close running application and background sync before install/update
 AppMutex=Global\BilleasePro_App_SingleInstance_Mutex_99938A2D,Global\BilleasePro_SyncService_Mutex_482D1C90

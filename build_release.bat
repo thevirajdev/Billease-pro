@@ -23,6 +23,8 @@ if %ERRORLEVEL% NEQ 0 (
     pause
     exit /b %ERRORLEVEL%
 )
+if not exist "publish_output" mkdir "publish_output"
+robocopy "BillingSuite.App\bin\Release\net8.0-windows\win-x64\publish" "publish_output" /E /PURGE >nul
 
 echo.
 echo [3/3] Creating Modern Setup Installer (BilleasePro_Setup.exe)...

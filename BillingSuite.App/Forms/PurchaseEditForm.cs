@@ -30,6 +30,7 @@ namespace BillingSuite.App.Forms
         private readonly ToolStripButton tsVoid = new ToolStripButton();
         private readonly ToolStripButton tsAiImport = new ToolStripButton();
         private readonly ToolStripButton tsSave = new ToolStripButton();
+        private readonly ToolStripButton tsSaveDraft = new ToolStripButton();
 
         private readonly GroupBox gbSupplier = new GroupBox();
         private readonly GroupBox gbPurchase = new GroupBox();
@@ -80,6 +81,7 @@ namespace BillingSuite.App.Forms
         public Purchase Model { get; private set; }
         private bool autoSaving = false;
         private bool _savedAndClosing = false;
+        private bool _isUpdatingCell = false;
 
         // IAiControllable Implementation
         public object GetAiContext()
@@ -166,7 +168,7 @@ namespace BillingSuite.App.Forms
             });
         }
 
-        public PurchaseEditForm(int? purchaseId = null)
+        public PurchaseEditForm(int? purchaseId = null, int? presetSupplierId = null)
         {
             Services.FormIconHelper.ApplyIcon(this);
             Text = purchaseId == null ? "Create Purchase" : "Edit Purchase";
@@ -201,13 +203,17 @@ namespace BillingSuite.App.Forms
             tsTemplate.DropDownItems.Add("Compact", null, (s, e) => { currentTemplate = "Compact"; tsTemplate.Text = "Template: Compact"; });
             tsTemplate.DropDownItems.Add("Wide", null, (s, e) => { currentTemplate = "Wide"; tsTemplate.Text = "Template: Wide"; });
             tsSave.Text = "Save";
+            tsSave.ToolTipText = "Save purchase bill and update product stock";
+            tsSaveDraft.Text = "Save as Draft";
+            tsSaveDraft.ToolTipText = "Save purchase bill to list without updating stock";
+            tsSaveDraft.Click += (s, e) => { if (SavePurchase(asDraft: true)) { _savedAndClosing = true; DialogResult = DialogResult.OK; Close(); } };
             var tsSearch = new ToolStripButton { Text = "Search Product" };
             tsSearch.Click += (s, e) => {
                 try { using var f = new PurchaseSearchForm(); f.ShowDialog(this); } catch { }
             };
             tsAiImport.Text = "📁 PDF Import";
             tsAiImport.Click += (s, e) => DoAiImport();
-            tool.Items.AddRange(new ToolStripItem[] { tsSelectSupplier, new ToolStripSeparator(), tsAddLine, tsDeleteLine, tsSearch, tsAiImport, new ToolStripSeparator(), tsPreview, tsPrint, tsTemplate, tsEmail, tsMarkPaid, tsVoid, tsSave });
+            tool.Items.AddRange(new ToolStripItem[] { tsSelectSupplier, new ToolStripSeparator(), tsAddLine, tsDeleteLine, tsSearch, tsAiImport, new ToolStripSeparator(), tsPreview, tsPrint, tsTemplate, tsEmail, tsMarkPaid, tsVoid, tsSave, tsSaveDraft });
             pnlToolbar.Controls.Add(tool);
 
             // Content host
@@ -340,7 +346,9 @@ namespace BillingSuite.App.Forms
             var colHsn = new DataGridViewTextBoxColumn { HeaderText = "HSN", Name = "colHsn", ReadOnly = false, Width = 90 };
             var colCategory = new DataGridViewTextBoxColumn { HeaderText = "Category", Name = "colCategory", ReadOnly = false, Width = 130 };
             var colAmount = new DataGridViewTextBoxColumn { HeaderText = "Amount", Name = "colAmount", ReadOnly = true, Width = 110, DefaultCellStyle = new DataGridViewCellStyle { Format = "0.00", Alignment = DataGridViewContentAlignment.MiddleRight, BackColor = Color.FromArgb(245, 245, 245) } };
+            var colId = new DataGridViewTextBoxColumn { HeaderText = "Id", Name = "colId", Visible = false };
             
+            gridItems.Columns.Add(colId);
             gridItems.Columns.Add(colSerial);
             gridItems.Columns.Add(colSku);
             gridItems.Columns.Add(colName);
@@ -503,7 +511,7 @@ namespace BillingSuite.App.Forms
                 {
                     try {
                         var r = gridItems.Rows[e.RowIndex];
-                        if (autoSaving) return; // ignore during mass updates
+                        if (autoSaving || _isUpdatingCell) return; // ignore during mass updates
 
                         if (colName == "colSku")
                         {
@@ -551,43 +559,59 @@ namespace BillingSuite.App.Forms
                         {
                             if (ParseDecimal(r.Cells["colIgst"].Value) > 0)
                             {
-                                r.Cells["colCgst"].Value = 0m;
-                                r.Cells["colSgst"].Value = 0m;
+                                try { _isUpdatingCell = true; r.Cells["colCgst"].Value = 0m; r.Cells["colSgst"].Value = 0m; } finally { _isUpdatingCell = false; }
                             }
                         }
                         else if (colName == "colCgst" || colName == "colSgst")
                         {
                             if (ParseDecimal(r.Cells["colCgst"].Value) > 0 || ParseDecimal(r.Cells["colSgst"].Value) > 0)
                             {
-                                r.Cells["colIgst"].Value = 0m;
+                                try { _isUpdatingCell = true; r.Cells["colIgst"].Value = 0m; } finally { _isUpdatingCell = false; }
                             }
                         }
 
                         if (colName == "colRate" || colName == "colDisc" || colName == "colCgst" || colName == "colSgst" || colName == "colIgst")
                         {
-                            decimal rate = ParseDecimal(r.Cells["colRate"].Value) ?? 0;
-                            decimal disc = ParseDecimal(r.Cells["colDisc"].Value) ?? 0;
-                            decimal cgst = ParseDecimal(r.Cells["colCgst"].Value) ?? 0;
-                            decimal sgst = ParseDecimal(r.Cells["colSgst"].Value) ?? 0;
-                            decimal igst = ParseDecimal(r.Cells["colIgst"].Value) ?? 0;
-                            
-                            decimal taxable = rate * (1 - disc / 100);
-                            decimal cost = taxable * (1 + (cgst + sgst + igst) / 100);
-                            r.Cells["colCost"].Value = Math.Round(cost, 2);
+                            try
+                            {
+                                _isUpdatingCell = true;
+                                decimal rate = ParseDecimal(r.Cells["colRate"].Value) ?? 0;
+                                decimal disc = ParseDecimal(r.Cells["colDisc"].Value) ?? 0;
+                                decimal cgst = ParseDecimal(r.Cells["colCgst"].Value) ?? 0;
+                                decimal sgst = ParseDecimal(r.Cells["colSgst"].Value) ?? 0;
+                                decimal igst = ParseDecimal(r.Cells["colIgst"].Value) ?? 0;
+                                
+                                decimal taxable = rate * (1 - disc / 100);
+                                decimal cost = taxable * (1 + (cgst + sgst + igst) / 100);
+                                r.Cells["colCost"].Value = Math.Round(cost, 2);
+                            }
+                            finally
+                            {
+                                _isUpdatingCell = false;
+                            }
                         }
                         else if (colName == "colCost")
                         {
-                            decimal cost = ParseDecimal(r.Cells["colCost"].Value) ?? 0;
-                            decimal disc = ParseDecimal(r.Cells["colDisc"].Value) ?? 0;
-                            decimal cgst = ParseDecimal(r.Cells["colCgst"].Value) ?? 0;
-                            decimal sgst = ParseDecimal(r.Cells["colSgst"].Value) ?? 0;
-                            decimal igst = ParseDecimal(r.Cells["colIgst"].Value) ?? 0;
-                            
-                            if (disc < 100)
+                            try
                             {
-                                decimal taxable = cost / (1 + (cgst + sgst + igst) / 100);
-                                decimal rate = taxable / (1 - disc / 100);
-                                r.Cells["colRate"].Value = Math.Round(rate, 2);
+                                _isUpdatingCell = true;
+                                decimal cost = ParseDecimal(r.Cells["colCost"].Value) ?? 0;
+                                decimal disc = ParseDecimal(r.Cells["colDisc"].Value) ?? 0;
+                                decimal cgst = ParseDecimal(r.Cells["colCgst"].Value) ?? 0;
+                                decimal sgst = ParseDecimal(r.Cells["colSgst"].Value) ?? 0;
+                                decimal igst = ParseDecimal(r.Cells["colIgst"].Value) ?? 0;
+                                
+                                decimal totalTaxPct = cgst + sgst + igst;
+                                if (disc < 100)
+                                {
+                                    decimal taxable = totalTaxPct > 0 ? (cost / (1 + totalTaxPct / 100)) : cost;
+                                    decimal rate = taxable / (1 - disc / 100);
+                                    r.Cells["colRate"].Value = Math.Round(rate, 2);
+                                }
+                            }
+                            finally
+                            {
+                                _isUpdatingCell = false;
                             }
                         }
 
@@ -765,6 +789,10 @@ namespace BillingSuite.App.Forms
             // Initialize model
             Model = purchaseId == null ? new Purchase { PurchaseDate = DateTime.Today } : LoadExisting(purchaseId.Value);
             if (Model == null) Model = new Purchase { PurchaseDate = DateTime.Today };
+            if (presetSupplierId.HasValue && (Model.SupplierId <= 0))
+            {
+                Model.SupplierId = presetSupplierId.Value;
+            }
             txtInvoiceNo.Text = Model.InvoiceNumber ?? string.Empty;
             dtPurchase.Value = (Model.PurchaseDate == default ? DateTime.Today : Model.PurchaseDate).Date;
             txtNotes.Text = Model.Notes ?? string.Empty;
@@ -830,7 +858,7 @@ namespace BillingSuite.App.Forms
             };
             tsPreview.Click += (s, e) => DoPreview();
             tsPrint.Click += (s, e) => DoPreview(true);
-            tsSave.Click += (s, e) => { if (SavePurchase()) { _savedAndClosing = true; DialogResult = DialogResult.OK; Close(); } };
+            tsSave.Click += (s, e) => { if (SavePurchase(asDraft: false)) { _savedAndClosing = true; DialogResult = DialogResult.OK; Close(); } };
             tsVoid.Click += (s, e) => DoVoid();
 
             // After show, update payments grid and summary
@@ -847,15 +875,35 @@ namespace BillingSuite.App.Forms
             {
                 if (autoSaving) return;
                 if (_savedAndClosing) return; // already saved via Save button
-                // Ask the user: Save now (with stock), Save as Draft (no stock), or Cancel (discard)
-                var choice = MessageBox.Show(this,
-                    "Do you want to SAVE this purchase?\n\nYes = Save (stock will be updated)\nNo = Save as Draft (NOT added to stock, can be edited later)\nCancel = Do not save",
-                    "Save Purchase", MessageBoxButtons.YesNoCancel, MessageBoxIcon.Question);
-                if (choice == DialogResult.Cancel) { e.Cancel = true; return; }
+                using var prompt = new PurchaseClosingPromptForm();
+                var choice = prompt.ShowDialog(this);
+                if (choice == DialogResult.Cancel)
+                {
+                    e.Cancel = true;
+                    return;
+                }
+                if (choice == DialogResult.Abort)
+                {
+                    // Discard changes & exit without saving
+                    return;
+                }
                 bool asDraft = (choice == DialogResult.No);
-                try { autoSaving = true; if (!SavePurchase(asDraft)) e.Cancel = true; }
-                catch { }
-                finally { autoSaving = false; }
+                try
+                {
+                    autoSaving = true;
+                    if (!SavePurchase(asDraft))
+                        e.Cancel = true;
+                    else
+                        _savedAndClosing = true;
+                }
+                catch
+                {
+                    e.Cancel = true;
+                }
+                finally
+                {
+                    autoSaving = false;
+                }
             };
 
             UpdateTotals();
@@ -915,35 +963,58 @@ namespace BillingSuite.App.Forms
 
         private void AddRowFromItem(PurchaseItem it)
         {
-            int idx = gridItems.Rows.Add();
-            var r = gridItems.Rows[idx];
-            r.Cells["colName"].Value = it.ProductName;
-            r.Cells["colBatch"].Value = it.BatchNumber;
-            r.Cells["colExpiry"].Value = it.Expiry?.ToString("dd/MM/yyyy");
-            r.Cells["colMrp"].Value = it.Mrp;
-            r.Cells["colSell"].Value = it.SellingPrice;
-            r.Cells["colCost"].Value = it.CostPrice;
-            r.Cells["colRate"].Value = it.Rate;
-            r.Cells["colDisc"].Value = it.DiscountPercent;
-            r.Cells["colCgst"].Value = it.CgstPercent;
-            r.Cells["colSgst"].Value = it.SgstPercent;
-            r.Cells["colIgst"].Value = it.IgstPercent;
-            r.Cells["colQty"].Value = it.Quantity;
-            r.Cells["colPack"].Value = it.Pack;
-            r.Cells["colMkt"].Value = it.MarketedBy;
-            r.Cells["colBonus"].Value = it.Bonus;
-            
-            // Link metadata if possible
+            autoSaving = true;
             try
             {
-                using var db = new AppDbContext();
-                var prod = db.Products.FirstOrDefault(x => x.Id == (it.ProductId ?? 0) || x.Name == it.ProductName);
-                if (prod != null)
+                int idx = gridItems.Rows.Add();
+                var r = gridItems.Rows[idx];
+                r.Cells["colId"].Value = it.Id;
+                r.Cells["colName"].Value = it.ProductName;
+                r.Cells["colBatch"].Value = it.BatchNumber;
+                r.Cells["colExpiry"].Value = it.Expiry?.ToString("dd/MM/yyyy");
+                r.Cells["colMrp"].Value = it.Mrp;
+                r.Cells["colSell"].Value = it.SellingPrice;
+                r.Cells["colCost"].Value = it.CostPrice;
+                
+                decimal cost = it.CostPrice ?? 0m;
+                decimal cgst = it.CgstPercent ?? 0m;
+                decimal sgst = it.SgstPercent ?? 0m;
+                decimal igst = it.IgstPercent ?? 0m;
+                decimal disc = it.DiscountPercent ?? 0m;
+                decimal? rate = it.Rate;
+                if (!rate.HasValue && cost > 0)
                 {
-                    r.Cells["colHsn"].Value = prod.Hsn;
-                    r.Cells["colCategory"].Value = prod.Category;
+                    decimal taxPct = cgst + sgst + igst;
+                    decimal taxable = taxPct > 0 ? (cost / (1 + taxPct / 100m)) : cost;
+                    rate = (disc > 0 && disc < 100m) ? (taxable / (1 - disc / 100m)) : taxable;
                 }
-            } catch { }
+
+                r.Cells["colRate"].Value = rate.HasValue ? Math.Round(rate.Value, 2) : (decimal?)null;
+                r.Cells["colDisc"].Value = disc;
+                r.Cells["colCgst"].Value = cgst;
+                r.Cells["colSgst"].Value = sgst;
+                r.Cells["colIgst"].Value = igst;
+                r.Cells["colQty"].Value = it.Quantity;
+                r.Cells["colPack"].Value = it.Pack;
+                r.Cells["colMkt"].Value = it.MarketedBy;
+                r.Cells["colBonus"].Value = it.Bonus;
+                
+                // Link metadata if possible
+                try
+                {
+                    using var db = new AppDbContext();
+                    var prod = db.Products.FirstOrDefault(x => x.Id == (it.ProductId ?? 0) || x.Name == it.ProductName);
+                    if (prod != null)
+                    {
+                        r.Cells["colHsn"].Value = prod.Hsn;
+                        r.Cells["colCategory"].Value = prod.Category;
+                    }
+                } catch { }
+            }
+            finally
+            {
+                autoSaving = false;
+            }
         }
 
         private void DeleteCurrentRow()
@@ -987,16 +1058,37 @@ namespace BillingSuite.App.Forms
                     }
                     catch { }
                     if (!cost.HasValue) cost = picker.SelectedSellingPrice ?? picker.SelectedMrp ?? 0m;
-                    r.Cells["colCost"].Value = cost;
-                    r.Cells["colRate"].Value = rate ?? cost; 
-                    r.Cells["colDisc"].Value = disc ?? 0m;
-                    r.Cells["colCgst"].Value = cgst ?? 0m;
-                    r.Cells["colSgst"].Value = sgst ?? 0m;
-                    r.Cells["colIgst"].Value = igst ?? 0m;
-                    r.Cells["colQty"].Value = 1m;
-                    if (!string.IsNullOrWhiteSpace(pack)) r.Cells["colPack"].Value = pack;
-                    if (!string.IsNullOrWhiteSpace(mkt)) r.Cells["colMkt"].Value = mkt;
-                    if (!string.IsNullOrWhiteSpace(bonus)) r.Cells["colBonus"].Value = bonus;
+                    
+                    decimal cVal = cost ?? 0m;
+                    decimal cgstVal = cgst ?? 0m;
+                    decimal sgstVal = sgst ?? 0m;
+                    decimal igstVal = igst ?? 0m;
+                    decimal discVal = disc ?? 0m;
+                    if (!rate.HasValue && cVal > 0)
+                    {
+                        decimal taxPct = cgstVal + sgstVal + igstVal;
+                        decimal taxable = taxPct > 0 ? (cVal / (1 + taxPct / 100m)) : cVal;
+                        rate = (discVal > 0 && discVal < 100m) ? (taxable / (1 - discVal / 100m)) : taxable;
+                    }
+
+                    autoSaving = true;
+                    try
+                    {
+                        r.Cells["colCost"].Value = cost;
+                        r.Cells["colRate"].Value = rate.HasValue ? Math.Round(rate.Value, 2) : cost; 
+                        r.Cells["colDisc"].Value = discVal;
+                        r.Cells["colCgst"].Value = cgstVal;
+                        r.Cells["colSgst"].Value = sgstVal;
+                        r.Cells["colIgst"].Value = igstVal;
+                        r.Cells["colQty"].Value = 1m;
+                        if (!string.IsNullOrWhiteSpace(pack)) r.Cells["colPack"].Value = pack;
+                        if (!string.IsNullOrWhiteSpace(mkt)) r.Cells["colMkt"].Value = mkt;
+                        if (!string.IsNullOrWhiteSpace(bonus)) r.Cells["colBonus"].Value = bonus;
+                    }
+                    finally
+                    {
+                        autoSaving = false;
+                    }
 
                     // Focus quantity for quick edit
                     try { gridItems.ClearSelection(); gridItems.CurrentCell = r.Cells["colQty"]; gridItems.BeginEdit(true); } catch { }
@@ -1129,56 +1221,97 @@ namespace BillingSuite.App.Forms
                 using var db = new AppDbContext();
                 var p = Model?.Id > 0 ? db.Purchases.FirstOrDefault(x => x.Id == Model.Id) : null;
                 if (p == null) { p = new Purchase(); db.Purchases.Add(p); }
-                p.SupplierId = supId; p.PurchaseDate = dtPurchase.Value.Date; p.InvoiceNumber = txtInvoiceNo.Text?.Trim(); p.Notes = txtNotes.Text?.Trim();
+
+                bool wasPreviouslySaved = (p.Id > 0 && !string.Equals(p.Status, "Draft", StringComparison.OrdinalIgnoreCase));
+
+                p.SupplierId = supId; 
+                p.PurchaseDate = dtPurchase.Value.Date; 
+                p.InvoiceNumber = txtInvoiceNo.Text?.Trim(); 
+                p.Notes = txtNotes.Text?.Trim();
                 p.ExtraCostName = txtExtraCostName.Text?.Trim();
                 p.ExtraCostAmount = numExtraCost.Value;
                 p.ExtraCostIsPercent = chkExtraPercent.Checked;
                 p.Discount = numDiscount.Value;
                 p.DiscountIsPercent = chkDiscountPercent.Checked;
                 p.Tax = numTaxRate.Value;
-                p.TotalDiscount = ParseDecimal(lblTotalDiscVal.Text);
-                p.TotalCgst = ParseDecimal(lblTotalCgstVal.Text);
-                p.TotalSgst = ParseDecimal(lblTotalSgstVal.Text);
+                p.Status = asDraft ? "Draft" : "Saved";
 
                 // Ensure Purchase has an Id before adding items
                 if (p.Id == 0)
                 {
                     db.SaveChanges();
                 }
-                // Remove existing items if editing, but first reverse their stock effect to avoid double counting on edits
-                if (p.Id > 0)
+
+                // Track existing items if editing, and reverse stock effect ONLY IF the bill was previously Saved (not Draft)
+                var old = p.Id > 0 ? db.PurchaseItems.Where(i => i.PurchaseId == p.Id).ToList() : new List<PurchaseItem>();
+                if (old.Count > 0 && wasPreviouslySaved)
                 {
-                    var old = db.PurchaseItems.Where(i => i.PurchaseId == p.Id).ToList();
-                    if (old.Count > 0)
+                    try
+                    {
+                        foreach (var oi in old)
+                        {
+                            if (oi.ProductId.HasValue)
+                            {
+                                var oldBatchStr = (oi.BatchNumber ?? "").Trim();
+                                var pb = db.ProductBatches.FirstOrDefault(b => b.ProductIdRef == oi.ProductId.Value && (b.BatchNumber ?? "").Trim() == oldBatchStr);
+                                if (pb == null && string.IsNullOrEmpty(oldBatchStr))
+                                {
+                                    pb = db.ProductBatches.FirstOrDefault(b => b.ProductIdRef == oi.ProductId.Value);
+                                }
+                                if (pb != null)
+                                {
+                                    var prev = pb.Stock ?? 0m;
+                                    pb.Stock = Math.Max(0m, prev - oi.Quantity);
+                                    pb.UpdatedAt = DateTime.UtcNow;
+                                }
+                            }
+                        }
+                        db.SaveChanges();
+                    }
+                    catch { }
+                }
+
+                // Identify which items were removed from the grid
+                var currentGridIds = new HashSet<int>();
+                foreach (DataGridViewRow row in gridItems.Rows)
+                {
+                    if (row.IsNewRow) continue;
+                    if (row.Cells["colId"]?.Value is int idVal && idVal > 0)
+                    {
+                        currentGridIds.Add(idVal);
+                    }
+                    else if (int.TryParse(row.Cells["colId"]?.Value?.ToString(), out int parsedId) && parsedId > 0)
+                    {
+                        currentGridIds.Add(parsedId);
+                    }
+                }
+
+                // Delete items that were actually removed from the grid
+                var toRemove = old.Where(oi => !currentGridIds.Contains(oi.Id)).ToList();
+                if (toRemove.Count > 0)
+                {
+                    db.PurchaseItems.RemoveRange(toRemove);
+                    foreach (var rem in toRemove)
                     {
                         try
                         {
-                            foreach (var oi in old)
+                            db.RecycleBin.Add(new RecycleBinItem
                             {
-                                if (oi.ProductId.HasValue)
-                                {
-                                    var pb = db.ProductBatches.FirstOrDefault(b => b.ProductIdRef == oi.ProductId.Value && b.BatchNumber == oi.BatchNumber);
-                                    if (pb != null)
-                                    {
-                                        var prev = pb.Stock ?? 0m;
-                                        pb.Stock = Math.Max(0m, prev - oi.Quantity);
-                                        pb.UpdatedAt = DateTime.UtcNow;
-                                    }
-                                }
-                            }
-                            db.SaveChanges();
+                                EntityType = "purchase_item",
+                                EntityId = rem.Id,
+                                JsonData = System.Text.Json.JsonSerializer.Serialize(rem),
+                                DeletedAt = DateTime.UtcNow
+                            });
                         }
                         catch { }
                     }
-                    if (old.Count > 0)
-                    {
-                        db.PurchaseItems.RemoveRange(old);
-                        db.SaveChanges();
-                    }
+                    db.SaveChanges();
                 }
 
                 decimal subtotal = 0m;
                 bool hasAnyRow = false;
+                var savedRows = new List<(DataGridViewRow row, PurchaseItem item)>();
+
                 foreach (DataGridViewRow row in gridItems.Rows)
                 {
                     if (row.IsNewRow) continue;
@@ -1208,8 +1341,7 @@ namespace BillingSuite.App.Forms
                     {
                         prod = new Product { Name = name };
                         db.Products.Add(prod);
-                        // Save items + updated purchase totals
-                db.SaveChanges();
+                        db.SaveChanges();
                     }
                     // update product HSN/Category if provided
                     if (!string.IsNullOrWhiteSpace(hsn)) prod.Hsn = hsn;
@@ -1222,66 +1354,93 @@ namespace BillingSuite.App.Forms
                     // Draft: purchase + items saved but stock/batches NOT touched until final save
                     
                     // Sync updated metadata (MarketedBy) ONLY IF NOT EMPTY and check expiry globally
-                    if (!string.IsNullOrWhiteSpace(mkt))
+                    if (!asDraft && !string.IsNullOrWhiteSpace(mkt))
                     {
                         InventoryService.SyncProductMetadata(db, prod.Id, mkt);
                     }
-                    InventoryService.SyncExpiredStock(db);
-
-                    var it = new PurchaseItem
+                    if (!asDraft)
                     {
-                        PurchaseId = p.Id,
-                        ProductId = prod.Id,
-                        ProductName = prod.Name,
-                        BatchNumber = batch,
-                        Mrp = mrp,
-                        CostPrice = cost,
-                        SellingPrice = sell,
-                        Quantity = qty,
-                        Pack = pack,
-                        Bonus = bonus,
-                        MarketedBy = mkt,
-                        Expiry = exp,
-                        Rate = rate,
-                        DiscountPercent = disc,
-                        CgstPercent = cgst,
-                        SgstPercent = sgst,
-                        IgstPercent = igst,
-                        LineTotal = cost * qty
-                    };
-                    db.PurchaseItems.Add(it);
+                        InventoryService.SyncExpiredStock(db);
+                    }
+
+                    int? existingItemId = null;
+                    if (row.Cells["colId"]?.Value is int cId && cId > 0) existingItemId = cId;
+                    else if (int.TryParse(row.Cells["colId"]?.Value?.ToString(), out int pId) && pId > 0) existingItemId = pId;
+
+                    PurchaseItem it;
+                    if (existingItemId.HasValue && old.FirstOrDefault(oi => oi.Id == existingItemId.Value) is PurchaseItem existingPi)
+                    {
+                        it = existingPi;
+                    }
+                    else
+                    {
+                        it = new PurchaseItem { PurchaseId = p.Id };
+                        db.PurchaseItems.Add(it);
+                    }
+
+                    it.PurchaseId = p.Id;
+                    it.ProductId = prod.Id;
+                    it.ProductName = prod.Name;
+                    it.BatchNumber = batch;
+                    it.Mrp = mrp;
+                    it.CostPrice = cost;
+                    it.SellingPrice = sell;
+                    it.Quantity = qty;
+                    it.Pack = pack;
+                    it.Bonus = bonus;
+                    it.MarketedBy = mkt;
+                    it.Expiry = exp;
+                    it.Rate = rate;
+                    it.DiscountPercent = disc;
+                    it.CgstPercent = cgst;
+                    it.SgstPercent = sgst;
+                    it.IgstPercent = igst;
+                    it.LineTotal = cost * qty;
                     subtotal += it.LineTotal ?? 0m;
+
+                    savedRows.Add((row, it));
                 }
-                // If editing and no rows present, avoid changing totals to zero silently; but proceed as user intent if grid cleared
-                // Also track summary taxes for reporting
+                
+                p.Subtotal = subtotal;
                 p.TotalDiscount = ParseDecimal(lblTotalDiscVal.Text);
                 p.TotalCgst = ParseDecimal(lblTotalCgstVal.Text);
                 p.TotalSgst = ParseDecimal(lblTotalSgstVal.Text);
                 p.TotalIgst = ParseDecimal(lblTotalIgstVal.Text);
                 p.Total = ParseDecimal(lblTotalVal.Text) ?? 0m;
+                p.UpdatedAt = DateTime.UtcNow;
                 db.SaveChanges();
+
+                // Map updated/inserted item IDs back to the grid rows
+                foreach (var (r, item) in savedRows)
+                {
+                    r.Cells["colId"].Value = item.Id;
+                }
+
                 Model = p;
                 try { RefreshPaymentsAndSummary(); } catch { }
 
-                // Batch limit rule: a product can hold a MAX of 4 batches. Only when a 5th arrives,
-                // remove oldest zero-stock batches until back to 4. Never delete while count <= 4.
-                try
+                if (!asDraft)
                 {
-                    var productsToCheck = db.Products.Select(x => x.Id).ToList();
-                    foreach (var pid in productsToCheck)
+                    // Batch limit rule: a product can hold a MAX of 4 batches. Only when a 5th arrives,
+                    // remove oldest zero-stock batches until back to 4. Never delete while count <= 4.
+                    try
                     {
-                        var batches = db.ProductBatches.Where(b => b.ProductIdRef == pid).OrderBy(b => b.UpdatedAt).ThenBy(b => b.Id).ToList();
-                        while (batches.Count > 4)
+                        var productsToCheck = db.Products.Select(x => x.Id).ToList();
+                        foreach (var pid in productsToCheck)
                         {
-                            // Prefer deleting the oldest batch with zero stock; otherwise delete the oldest
-                            var victim = batches.FirstOrDefault(b => (b.Stock ?? 0m) <= 0m) ?? batches.First();
-                            db.ProductBatches.Remove(victim);
-                            batches.Remove(victim);
+                            var batches = db.ProductBatches.Where(b => b.ProductIdRef == pid).OrderBy(b => b.UpdatedAt).ThenBy(b => b.Id).ToList();
+                            while (batches.Count > 4)
+                            {
+                                // Prefer deleting the oldest batch with zero stock; otherwise delete the oldest
+                                var victim = batches.FirstOrDefault(b => (b.Stock ?? 0m) <= 0m) ?? batches.First();
+                                db.ProductBatches.Remove(victim);
+                                batches.Remove(victim);
+                            }
                         }
+                        db.SaveChanges();
                     }
-                    db.SaveChanges();
+                    catch { }
                 }
-                catch { }
                 return true;
             }
             catch (Exception ex)
@@ -1296,7 +1455,12 @@ namespace BillingSuite.App.Forms
         private void ApplyPurchaseToProduct(AppDbContext db, Product prod, TempRow it)
         {
             // Use ProductBatches table: if batch exists -> add stock; else create batch
-            var existing = db.ProductBatches.FirstOrDefault(b => b.ProductIdRef == prod.Id && b.BatchNumber == it.Batch);
+            var targetBatch = (it.Batch ?? "").Trim();
+            var existing = db.ProductBatches.FirstOrDefault(b => b.ProductIdRef == prod.Id && (b.BatchNumber ?? "").Trim() == targetBatch);
+            if (existing == null && string.IsNullOrEmpty(targetBatch))
+            {
+                existing = db.ProductBatches.FirstOrDefault(b => b.ProductIdRef == prod.Id);
+            }
             if (existing != null)
             {
                 existing.Mrp = it.Mrp ?? existing.Mrp;
@@ -1563,6 +1727,17 @@ namespace BillingSuite.App.Forms
                 var pay = db.PurchasePayments.FirstOrDefault(pp => pp.Id == payId);
                 if (pay != null)
                 {
+                    try
+                    {
+                        db.RecycleBin.Add(new RecycleBinItem
+                        {
+                            EntityType = "purchase_payment",
+                            EntityId = pay.Id,
+                            JsonData = System.Text.Json.JsonSerializer.Serialize(pay),
+                            DeletedAt = DateTime.UtcNow
+                        });
+                    }
+                    catch { }
                     db.PurchasePayments.Remove(pay);
                     db.SaveChanges();
                     RefreshPaymentsAndSummary();

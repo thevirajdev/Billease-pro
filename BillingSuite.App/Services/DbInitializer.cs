@@ -449,6 +449,7 @@ namespace BillingSuite.App.Services
             AddColumn("Purchases", "TotalCgst", "REAL NULL");
             AddColumn("Purchases", "TotalSgst", "REAL NULL");
             AddColumn("Purchases", "TotalIgst", "REAL NULL");
+            AddColumn("Purchases", "Status", "TEXT NULL DEFAULT 'Saved'");
 
             // Phase 8: per-user ownership column on every business data table.
             foreach (var table in new[] { "Products", "ProductBatches", "Customers", "Invoices", "InvoiceItems", "Payments",
@@ -666,7 +667,14 @@ namespace BillingSuite.App.Services
                 "UPDATE Users SET CreatedAt = datetime('now') WHERE CreatedAt = '' OR CreatedAt IS NULL;",
                 "UPDATE AppSettings SET Value = 'India' WHERE Key = 'company.country' AND (Value = 'Pakistan' OR Value = '' OR Value IS NULL);",
                 "UPDATE AppSettings SET Value = '' WHERE Key = 'company.city' AND Value = 'Lahore';",
-                "UPDATE AppSettings SET Value = '' WHERE Key = 'company.address1' AND Value = '12 Market Road';"
+                "UPDATE AppSettings SET Value = '' WHERE Key = 'company.address1' AND Value = '12 Market Road';",
+                "DELETE FROM PurchaseItems WHERE Id NOT IN (SELECT MIN(Id) FROM PurchaseItems GROUP BY PurchaseId, COALESCE(ProductId, 0), COALESCE(ProductName, ''), COALESCE(BatchNumber, ''), Quantity, CostPrice, LineTotal);",
+                "DELETE FROM PurchasePayments WHERE Id NOT IN (SELECT MIN(Id) FROM PurchasePayments GROUP BY PurchaseId, Date, Amount, Method, Notes);",
+                "UPDATE RecycleBin SET EntityType = 'Purchase' WHERE LOWER(EntityType) = 'purchase';",
+                "DELETE FROM Purchases WHERE Id IN (SELECT EntityId FROM RecycleBin WHERE LOWER(EntityType) = 'purchase');",
+                "DELETE FROM PurchaseItems WHERE PurchaseId NOT IN (SELECT Id FROM Purchases);",
+                "DELETE FROM PurchasePayments WHERE PurchaseId NOT IN (SELECT Id FROM Purchases);",
+                "UPDATE Purchases SET Subtotal = COALESCE((SELECT SUM(LineTotal) FROM PurchaseItems WHERE PurchaseId = Purchases.Id), Subtotal), Total = COALESCE((SELECT SUM(LineTotal) FROM PurchaseItems WHERE PurchaseId = Purchases.Id), Subtotal) + COALESCE(Tax, 0) - COALESCE(Discount, 0) + COALESCE(ExtraCostAmount, 0), Paid = COALESCE((SELECT SUM(Amount) FROM PurchasePayments WHERE PurchaseId = Purchases.Id), Paid), Due = (COALESCE((SELECT SUM(LineTotal) FROM PurchaseItems WHERE PurchaseId = Purchases.Id), Subtotal) + COALESCE(Tax, 0) - COALESCE(Discount, 0) + COALESCE(ExtraCostAmount, 0)) - COALESCE((SELECT SUM(Amount) FROM PurchasePayments WHERE PurchaseId = Purchases.Id), Paid);"
             };
 
             foreach (var sql in statements)

@@ -21,6 +21,7 @@ namespace BillingSuite.App.Models
         public decimal? Paid { get; set; }
         public decimal? Due { get; set; }
         public string? Notes { get; set; }
+        public string? Status { get; set; } = "Saved";
         public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
         public DateTime? UpdatedAt { get; set; }
 

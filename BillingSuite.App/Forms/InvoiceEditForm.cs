@@ -434,26 +434,9 @@ namespace BillingSuite.App.Forms
                     catch { try { DialogResult = DialogResult.Cancel; } catch { } Close(); }
                     return;
                 }
-                var name = dlg.CustomerName;
-                if (string.IsNullOrWhiteSpace(name) && !dlg.SelectedCustomerId.HasValue) return;
+                if (!dlg.SelectedCustomerId.HasValue) return;
                 using var db = new AppDbContext();
-                int id;
-                if (dlg.SelectedCustomerId.HasValue)
-                {
-                    id = dlg.SelectedCustomerId.Value;
-                }
-                else
-                {
-                    var existing = db.Customers.FirstOrDefault(c => c.Name.ToLower() == name!.ToLower());
-                    if (existing == null)
-                    {
-                        var c = new Customer { Name = name! };
-                        db.Customers.Add(c);
-                        db.SaveChanges();
-                        id = c.Id;
-                    }
-                    else id = existing.Id;
-                }
+                int id = dlg.SelectedCustomerId.Value;
                 // Refresh combo
                 var customers = db.Customers.OrderBy(c => c.Name).ToList();
                 cmbCustomer.DataSource = new BindingSource(customers, null);

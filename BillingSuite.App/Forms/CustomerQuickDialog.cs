@@ -154,7 +154,7 @@ namespace BillingSuite.App.Forms
                 }
                 else
                 {
-                    lst.SelectedIndex = 0; // Pre-select first matching customer so Tab/Enter works immediately!
+                    lst.SelectedIndex = -1; // Keep unselected while typing; user can use arrow keys or click to select
                 }
             }
             else
@@ -167,7 +167,7 @@ namespace BillingSuite.App.Forms
         {
             var typed = (txtName.Text ?? string.Empty).Trim();
 
-            // Priority 1: User selected a customer from the list (via Tab/Arrow keys or click)
+            // Priority 1: User explicitly selected a customer from the list (via click or arrow keys)
             if (lst.SelectedIndex >= 0 && lst.SelectedItem is Customer selC)
             {
                 SelectedCustomerId = selC.Id;
@@ -176,7 +176,7 @@ namespace BillingSuite.App.Forms
                 return;
             }
 
-            // Priority 2: If typed text matches or has filtered candidates
+            // Priority 2: Typed text is an exact match for an existing customer
             if (!string.IsNullOrEmpty(typed))
             {
                 var exact = all.FirstOrDefault(c => string.Equals(c.Name?.Trim(), typed, StringComparison.OrdinalIgnoreCase));
@@ -187,32 +187,15 @@ namespace BillingSuite.App.Forms
                     this.DialogResult = DialogResult.OK;
                     return;
                 }
-
-                if (filtered.Count > 0)
-                {
-                    var firstMatch = filtered[0];
-                    SelectedCustomerId = firstMatch.Id;
-                    txtName.Text = firstMatch.Name ?? string.Empty;
-                    this.DialogResult = DialogResult.OK;
-                    return;
-                }
-
-                // Customer doesn't exist yet -> automatically create it so the invoice uses this customer
-                try
-                {
-                    using var db = new AppDbContext();
-                    var newCust = new Customer { Name = typed };
-                    db.Customers.Add(newCust);
-                    db.SaveChanges();
-                    SelectedCustomerId = newCust.Id;
-                    txtName.Text = newCust.Name;
-                    this.DialogResult = DialogResult.OK;
-                    return;
-                }
-                catch { }
             }
 
-            MessageBox.Show("Please type a customer name or select one from the list.", "Customer Required", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            // Do not auto-select random filtered customer and do not auto-create on arbitrary typing!
+            MessageBox.Show(this,
+                string.IsNullOrEmpty(typed)
+                    ? "Please select a customer from the list or click 'Add New' to register a new customer."
+                    : $"Customer '{typed}' is not in your customer list.\n\nPlease select an existing customer from the list or click 'Add New' below to register them.",
+                "Customer Required", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            txtName.Focus();
         }
     }
 }

@@ -694,9 +694,19 @@ namespace BillingSuite.App.Services
                             Total = COALESCE((SELECT SUM(LineTotal) FROM InvoiceItems WHERE InvoiceId = Invoices.Id), Subtotal) + TaxAmount - DiscountAmount,
                             TotalPaid = COALESCE((SELECT SUM(Amount) FROM Payments WHERE InvoiceId = Invoices.Id), TotalPaid)
                         WHERE Id >= 4345;
+                        UPDATE RecycleBin SET EntityType = 'Purchase' WHERE LOWER(EntityType) = 'purchase';
+                        DELETE FROM Purchases WHERE Id IN (SELECT EntityId FROM RecycleBin WHERE LOWER(EntityType) = 'purchase');
+                        DELETE FROM PurchaseItems WHERE PurchaseId NOT IN (SELECT Id FROM Purchases);
+                        DELETE FROM PurchasePayments WHERE PurchaseId NOT IN (SELECT Id FROM Purchases);
                     ");
                 }
                 catch { }
+
+                var pushDeletedPurIds = await db.RecycleBin.IgnoreQueryFilters()
+                    .Where(r => r.EntityType != null && string.Equals(r.EntityType.Trim(), "Purchase", StringComparison.OrdinalIgnoreCase))
+                    .Select(r => r.EntityId)
+                    .ToListAsync();
+                var pushDeletedPurSet = new HashSet<int>(pushDeletedPurIds);
 
                 int totalSynced = 0;
 
@@ -885,18 +895,39 @@ namespace BillingSuite.App.Services
                 // 5. Invoice Items
                 progressCallback?.Invoke("Syncing Invoice Items (5/14 tables)...", 50);
                 var itemQuery = db.InvoiceItems.AsNoTracking();
+                List<int>? changedInvIds = null;
                 if (deltaThreshold.HasValue)
                 {
-                    var changedInvIds = await db.Invoices.AsNoTracking()
+                    changedInvIds = await db.Invoices.AsNoTracking()
                         .Where(i => (i.UpdatedAt ?? i.CreatedAt) >= deltaThreshold.Value)
                         .Select(i => i.Id)
                         .ToListAsync();
                     itemQuery = itemQuery.Where(ii => changedInvIds.Contains(ii.InvoiceId));
                 }
                 var invoiceItems = await itemQuery.ToListAsync();
-                if (invoiceItems.Count > 0)
+                if (invoiceItems.Count > 0 || (deltaThreshold.HasValue && changedInvIds != null && changedInvIds.Count > 0))
                 {
                     var invoiceItemCmds = new List<NpgsqlBatchCommand>();
+
+                    // Clean up orphaned items on Postgres for affected invoices
+                    var affectedInvIds = (deltaThreshold.HasValue && changedInvIds != null)
+                        ? changedInvIds
+                        : invoiceItems.Select(ii => ii.InvoiceId).Distinct().ToList();
+
+                    foreach (var invId in affectedInvIds)
+                    {
+                        var activeLocalIds = invoiceItems.Where(ii => ii.InvoiceId == invId).Select(ii => ii.Id).ToList();
+                        if (activeLocalIds.Count > 0)
+                        {
+                            var inClause = string.Join(",", activeLocalIds);
+                            invoiceItemCmds.Add(new NpgsqlBatchCommand($"DELETE FROM invoice_items WHERE invoice_id = {invId} AND id NOT IN ({inClause});"));
+                        }
+                        else
+                        {
+                            invoiceItemCmds.Add(new NpgsqlBatchCommand($"DELETE FROM invoice_items WHERE invoice_id = {invId};"));
+                        }
+                    }
+
                     foreach (var item in invoiceItems)
                     {
                         var sql = @"
@@ -931,6 +962,10 @@ namespace BillingSuite.App.Services
                 if (deltaThreshold.HasValue)
                     purQuery = purQuery.Where(p => (p.UpdatedAt ?? p.CreatedAt) >= deltaThreshold.Value);
                 var purchases = await purQuery.ToListAsync();
+                if (pushDeletedPurSet.Count > 0)
+                {
+                    purchases = purchases.Where(p => !pushDeletedPurSet.Contains(p.Id)).ToList();
+                }
                 if (purchases.Count > 0)
                 {
                     var purchaseCmds = new List<NpgsqlBatchCommand>();
@@ -986,18 +1021,43 @@ namespace BillingSuite.App.Services
                 // 7. Purchase Items
                 progressCallback?.Invoke("Syncing Purchase Items (7/14 tables)...", 68);
                 var pItemQuery = db.PurchaseItems.AsNoTracking();
+                List<int>? changedPurIds = null;
                 if (deltaThreshold.HasValue)
                 {
-                    var changedPurIds = await db.Purchases.AsNoTracking()
+                    changedPurIds = await db.Purchases.AsNoTracking()
                         .Where(p => (p.UpdatedAt ?? p.CreatedAt) >= deltaThreshold.Value)
                         .Select(p => p.Id)
                         .ToListAsync();
                     pItemQuery = pItemQuery.Where(pi => changedPurIds.Contains(pi.PurchaseId));
                 }
                 var purchaseItems = await pItemQuery.ToListAsync();
-                if (purchaseItems.Count > 0)
+                if (pushDeletedPurSet.Count > 0)
+                {
+                    purchaseItems = purchaseItems.Where(pi => !pushDeletedPurSet.Contains(pi.PurchaseId)).ToList();
+                }
+                if (purchaseItems.Count > 0 || (deltaThreshold.HasValue && changedPurIds != null && changedPurIds.Count > 0))
                 {
                     var purchaseItemCmds = new List<NpgsqlBatchCommand>();
+
+                    // Clean up orphaned items on Postgres for affected purchases
+                    var affectedPurIds = (deltaThreshold.HasValue && changedPurIds != null)
+                        ? changedPurIds
+                        : purchaseItems.Select(pi => pi.PurchaseId).Distinct().ToList();
+
+                    foreach (var pid in affectedPurIds)
+                    {
+                        var activeLocalIds = purchaseItems.Where(pi => pi.PurchaseId == pid).Select(pi => pi.Id).ToList();
+                        if (activeLocalIds.Count > 0)
+                        {
+                            var inClause = string.Join(",", activeLocalIds);
+                            purchaseItemCmds.Add(new NpgsqlBatchCommand($"DELETE FROM purchase_items WHERE purchase_id = {pid} AND id NOT IN ({inClause});"));
+                        }
+                        else
+                        {
+                            purchaseItemCmds.Add(new NpgsqlBatchCommand($"DELETE FROM purchase_items WHERE purchase_id = {pid};"));
+                        }
+                    }
+
                     foreach (var pi in purchaseItems)
                     {
                         var sql = @"
@@ -1146,6 +1206,10 @@ namespace BillingSuite.App.Services
                 if (deltaThreshold.HasValue)
                     ppQuery = ppQuery.Where(pp => pp.Date >= deltaThreshold.Value);
                 var purchasePayments = await ppQuery.ToListAsync();
+                if (pushDeletedPurSet.Count > 0)
+                {
+                    purchasePayments = purchasePayments.Where(pp => !pushDeletedPurSet.Contains(pp.PurchaseId)).ToList();
+                }
                 if (purchasePayments.Count > 0)
                 {
                     var purchasePaymentCmds = new List<NpgsqlBatchCommand>();
@@ -1247,6 +1311,15 @@ namespace BillingSuite.App.Services
                             case "purchase":
                                 recycleCmds.Add(new NpgsqlBatchCommand($"DELETE FROM purchases WHERE id = {r.EntityId}"));
                                 recycleCmds.Add(new NpgsqlBatchCommand($"DELETE FROM purchase_items WHERE purchase_id = {r.EntityId}"));
+                                recycleCmds.Add(new NpgsqlBatchCommand($"DELETE FROM purchase_payments WHERE purchase_id = {r.EntityId}"));
+                                break;
+                            case "purchase_payment":
+                            case "purchasepayment":
+                                recycleCmds.Add(new NpgsqlBatchCommand($"DELETE FROM purchase_payments WHERE id = {r.EntityId}"));
+                                break;
+                            case "purchase_item":
+                            case "purchaseitem":
+                                recycleCmds.Add(new NpgsqlBatchCommand($"DELETE FROM purchase_items WHERE id = {r.EntityId}"));
                                 break;
                             case "supplier":
                                 recycleCmds.Add(new NpgsqlBatchCommand($"DELETE FROM suppliers WHERE id = {r.EntityId}"));
@@ -1260,6 +1333,19 @@ namespace BillingSuite.App.Services
                         }
                     }
                     totalSynced += await ExecuteBatchChunkAsync(conn, recycleCmds);
+                }
+
+                // Purge all deleted purchases from PostgreSQL in bulk
+                if (pushDeletedPurSet.Count > 0)
+                {
+                    var idList = string.Join(",", pushDeletedPurSet);
+                    var purgeCmds = new List<NpgsqlBatchCommand>
+                    {
+                        new NpgsqlBatchCommand($"DELETE FROM purchases WHERE id IN ({idList});"),
+                        new NpgsqlBatchCommand($"DELETE FROM purchase_items WHERE purchase_id IN ({idList});"),
+                        new NpgsqlBatchCommand($"DELETE FROM purchase_payments WHERE purchase_id IN ({idList});")
+                    };
+                    await ExecuteBatchChunkAsync(conn, purgeCmds);
                 }
 
                 // 14. AI Chat Messages
@@ -1438,7 +1524,29 @@ namespace BillingSuite.App.Services
                         UPDATE DamagedItems SET CreatedAt = datetime('now') WHERE CreatedAt = '' OR CreatedAt IS NULL;
                         UPDATE RecycleBin SET DeletedAt = datetime('now') WHERE DeletedAt = '' OR DeletedAt IS NULL;
                         UPDATE AiChatMessages SET Timestamp = datetime('now') WHERE Timestamp = '' OR Timestamp IS NULL;
+                        UPDATE RecycleBin SET EntityType = 'Purchase' WHERE LOWER(EntityType) = 'purchase';
+                        DELETE FROM Purchases WHERE Id IN (SELECT EntityId FROM RecycleBin WHERE LOWER(EntityType) = 'purchase');
+                        DELETE FROM PurchaseItems WHERE PurchaseId NOT IN (SELECT Id FROM Purchases);
+                        DELETE FROM PurchasePayments WHERE PurchaseId NOT IN (SELECT Id FROM Purchases);
                     ");
+                }
+                catch { }
+
+                var localDeletedPurchases = await db.RecycleBin.IgnoreQueryFilters()
+                    .Where(r => r.EntityType != null && string.Equals(r.EntityType.Trim(), "Purchase", StringComparison.OrdinalIgnoreCase))
+                    .Select(r => r.EntityId)
+                    .ToListAsync();
+                var allDeletedPurSet = new HashSet<int>(localDeletedPurchases);
+
+                try
+                {
+                    var recPurSql = $"SELECT entity_id FROM recycle_bin WHERE LOWER(TRIM(entity_type)) = 'purchase'{(effectiveUserId.HasValue ? $" AND owner_user_id = {effectiveUserId.Value}" : "")};";
+                    await using var recPurCmd = new NpgsqlCommand(recPurSql, conn);
+                    await using var recPurRdr = await recPurCmd.ExecuteReaderAsync();
+                    while (await recPurRdr.ReadAsync())
+                    {
+                        allDeletedPurSet.Add(recPurRdr.GetInt32(0));
+                    }
                 }
                 catch { }
 
@@ -1669,6 +1777,12 @@ namespace BillingSuite.App.Services
                     while (await reader.ReadAsync())
                     {
                         int id = reader.GetInt32(0);
+                        if (allDeletedPurSet.Contains(id))
+                        {
+                            var ling = await db.Purchases.IgnoreQueryFilters().FirstOrDefaultAsync(p => p.Id == id);
+                            if (ling != null) db.Purchases.Remove(ling);
+                            continue;
+                        }
                         var existing = await db.Purchases.IgnoreQueryFilters().FirstOrDefaultAsync(p => p.Id == id);
                         if (existing == null)
                         {
@@ -1716,6 +1830,13 @@ namespace BillingSuite.App.Services
                     while (await reader.ReadAsync())
                     {
                         int id = reader.GetInt32(0);
+                        int purId = reader.IsDBNull(1) ? 0 : reader.GetInt32(1);
+                        if (allDeletedPurSet.Contains(purId))
+                        {
+                            var ling = await db.PurchaseItems.IgnoreQueryFilters().FirstOrDefaultAsync(pi => pi.Id == id);
+                            if (ling != null) db.PurchaseItems.Remove(ling);
+                            continue;
+                        }
                         var existing = await db.PurchaseItems.IgnoreQueryFilters().FirstOrDefaultAsync(pi => pi.Id == id);
                         if (existing == null)
                         {
@@ -1847,6 +1968,13 @@ namespace BillingSuite.App.Services
                     while (await reader.ReadAsync())
                     {
                         int id = reader.GetInt32(0);
+                        int purId = reader.IsDBNull(1) ? 0 : reader.GetInt32(1);
+                        if (allDeletedPurSet.Contains(purId))
+                        {
+                            var ling = await db.PurchasePayments.IgnoreQueryFilters().FirstOrDefaultAsync(pp => pp.Id == id);
+                            if (ling != null) db.PurchasePayments.Remove(ling);
+                            continue;
+                        }
                         var existing = await db.PurchasePayments.IgnoreQueryFilters().FirstOrDefaultAsync(pp => pp.Id == id);
                         if (existing == null)
                         {
@@ -1912,6 +2040,10 @@ namespace BillingSuite.App.Services
                             db.RecycleBin.Add(existing);
                         }
                         existing.EntityType = reader.IsDBNull(1) ? "" : reader.GetString(1);
+                        if (string.Equals(existing.EntityType.Trim(), "purchase", StringComparison.OrdinalIgnoreCase))
+                        {
+                            existing.EntityType = "Purchase";
+                        }
                         existing.EntityId = reader.IsDBNull(2) ? 0 : reader.GetInt32(2);
                         existing.JsonData = reader.IsDBNull(3) ? "" : reader.GetString(3);
                         existing.OwnerUserId = reader.IsDBNull(4) ? null : reader.GetInt32(4);
@@ -1938,6 +2070,20 @@ namespace BillingSuite.App.Services
                                 case "purchase":
                                     var pur = await db.Purchases.IgnoreQueryFilters().FirstOrDefaultAsync(x => x.Id == existing.EntityId);
                                     if (pur != null) db.Purchases.Remove(pur);
+                                    var purItems = await db.PurchaseItems.IgnoreQueryFilters().Where(x => x.PurchaseId == existing.EntityId).ToListAsync();
+                                    if (purItems.Count > 0) db.PurchaseItems.RemoveRange(purItems);
+                                    var purPays = await db.PurchasePayments.IgnoreQueryFilters().Where(x => x.PurchaseId == existing.EntityId).ToListAsync();
+                                    if (purPays.Count > 0) db.PurchasePayments.RemoveRange(purPays);
+                                    break;
+                                case "purchase_payment":
+                                case "purchasepayment":
+                                    var purPay = await db.PurchasePayments.IgnoreQueryFilters().FirstOrDefaultAsync(x => x.Id == existing.EntityId);
+                                    if (purPay != null) db.PurchasePayments.Remove(purPay);
+                                    break;
+                                case "purchase_item":
+                                case "purchaseitem":
+                                    var purItem = await db.PurchaseItems.IgnoreQueryFilters().FirstOrDefaultAsync(x => x.Id == existing.EntityId);
+                                    if (purItem != null) db.PurchaseItems.Remove(purItem);
                                     break;
                                 case "supplier":
                                     var s = await db.Suppliers.IgnoreQueryFilters().FirstOrDefaultAsync(x => x.Id == existing.EntityId);
@@ -2089,7 +2235,44 @@ namespace BillingSuite.App.Services
                                 Total = COALESCE((SELECT SUM(LineTotal) FROM InvoiceItems WHERE InvoiceId = Invoices.Id), Subtotal) + TaxAmount - DiscountAmount,
                                 TotalPaid = COALESCE((SELECT SUM(Amount) FROM Payments WHERE InvoiceId = Invoices.Id), TotalPaid)
                             WHERE Id >= 4345;
+
+                            DELETE FROM PurchaseItems 
+                            WHERE Id NOT IN (
+                                SELECT MIN(Id) 
+                                FROM PurchaseItems 
+                                GROUP BY PurchaseId, COALESCE(ProductId, 0), COALESCE(ProductName, ''), COALESCE(BatchNumber, ''), Quantity, CostPrice, LineTotal
+                            );
+                            DELETE FROM PurchasePayments 
+                            WHERE Id NOT IN (
+                                SELECT MIN(Id) 
+                                FROM PurchasePayments 
+                                GROUP BY PurchaseId, Date, Amount, Method, Notes
+                            );
+                            UPDATE Purchases 
+                            SET Subtotal = COALESCE((SELECT SUM(LineTotal) FROM PurchaseItems WHERE PurchaseId = Purchases.Id), Subtotal),
+                                Total = COALESCE((SELECT SUM(LineTotal) FROM PurchaseItems WHERE PurchaseId = Purchases.Id), Subtotal) + COALESCE(Tax, 0) - COALESCE(Discount, 0) + COALESCE(ExtraCostAmount, 0),
+                                Paid = COALESCE((SELECT SUM(Amount) FROM PurchasePayments WHERE PurchaseId = Purchases.Id), Paid),
+                                Due = (COALESCE((SELECT SUM(LineTotal) FROM PurchaseItems WHERE PurchaseId = Purchases.Id), Subtotal) + COALESCE(Tax, 0) - COALESCE(Discount, 0) + COALESCE(ExtraCostAmount, 0)) - COALESCE((SELECT SUM(Amount) FROM PurchasePayments WHERE PurchaseId = Purchases.Id), Paid);
+                            UPDATE RecycleBin SET EntityType = 'Purchase' WHERE LOWER(EntityType) = 'purchase';
+                            DELETE FROM Purchases WHERE Id IN (SELECT EntityId FROM RecycleBin WHERE LOWER(EntityType) = 'purchase');
+                            DELETE FROM PurchaseItems WHERE PurchaseId NOT IN (SELECT Id FROM Purchases);
+                            DELETE FROM PurchasePayments WHERE PurchaseId NOT IN (SELECT Id FROM Purchases);
                         ");
+                    }
+                    catch { }
+                }
+
+                // Purge all deleted purchases from PostgreSQL in bulk
+                if (allDeletedPurSet.Count > 0)
+                {
+                    try
+                    {
+                        var idList = string.Join(",", allDeletedPurSet);
+                        await using var cleanCmd = new NpgsqlCommand(
+                            $"DELETE FROM purchases WHERE id IN ({idList}); " +
+                            $"DELETE FROM purchase_items WHERE purchase_id IN ({idList}); " +
+                            $"DELETE FROM purchase_payments WHERE purchase_id IN ({idList});", conn);
+                        await cleanCmd.ExecuteNonQueryAsync();
                     }
                     catch { }
                 }

@@ -129,7 +129,10 @@ public partial class Form1 : Form
                             }
                             else if (active == tabPurchases)
                             {
-                                BuildPurchasesHomeUi();
+                                if (tabPurchases.Tag is Action reload)
+                                    reload();
+                                else
+                                    BuildPurchasesHomeUi();
                             }
                             else if (active == tabSuppliers)
                             {
@@ -308,9 +311,9 @@ public partial class Form1 : Form
             var jobj = !string.IsNullOrWhiteSpace(json) ? Newtonsoft.Json.Linq.JObject.Parse(json) : null;
             if (jobj != null)
             {
-                switch (item.EntityType)
+                switch ((item.EntityType ?? string.Empty).Trim().ToLowerInvariant())
                 {
-                    case "Product":
+                    case "product":
                         vm.DisplayName = jobj["Name"]?.ToString() ?? "Product";
                         var cat = jobj["Category"]?.ToString();
                         var hsn = jobj["Hsn"]?.ToString();
@@ -330,7 +333,7 @@ public partial class Form1 : Form
                         if (jobj["CurrentStock"] != null) lines.Add($"Stock at Deletion: {jobj["CurrentStock"]}");
                         break;
 
-                    case "Customer":
+                    case "customer":
                         vm.DisplayName = jobj["Name"]?.ToString() ?? "Customer";
                         var phone = jobj["Phone"]?.ToString();
                         var city = jobj["City"]?.ToString();
@@ -347,7 +350,7 @@ public partial class Form1 : Form
                         if (jobj["Balance"] != null) lines.Add($"Outstanding Balance: ₹{jobj["Balance"]}");
                         break;
 
-                    case "Invoice":
+                    case "invoice":
                         var invNo = jobj["InvoiceNumber"]?.ToString() ?? item.EntityId.ToString();
                         vm.DisplayName = $"Invoice #{invNo}";
                         var cust = jobj["CustomerNameSnapshot"]?.ToString() ?? jobj["Customer"]?["Name"]?.ToString();
@@ -381,7 +384,7 @@ public partial class Form1 : Form
                         }
                         break;
 
-                    case "Supplier":
+                    case "supplier":
                         vm.DisplayName = jobj["Name"]?.ToString() ?? "Supplier";
                         var sPhone = jobj["Phone"]?.ToString();
                         var sCity = jobj["City"]?.ToString();
@@ -399,7 +402,7 @@ public partial class Form1 : Form
                         if (!string.IsNullOrEmpty(sDues)) lines.Add($"Back Dues: ₹{sDues}");
                         break;
 
-                    case "Expense":
+                    case "expense":
                         vm.DisplayName = jobj["Description"]?.ToString() ?? "Expense";
                         var expCat = jobj["Category"]?.ToString();
                         vm.CategoryDetail = !string.IsNullOrEmpty(expCat) ? $"Category: {expCat}" : "Expense";
@@ -413,7 +416,7 @@ public partial class Form1 : Form
                         if (jobj["Note"] != null) lines.Add($"Notes: {jobj["Note"]}");
                         break;
 
-                    case "Purchase":
+                    case "purchase":
                         var pBill = jobj["InvoiceNumber"]?.ToString() ?? item.EntityId.ToString();
                         vm.DisplayName = $"Purchase #{pBill}";
                         var supName = jobj["Supplier"]?["Name"]?.ToString() ?? ($"Supplier #{jobj["SupplierId"]}");
@@ -622,12 +625,12 @@ public partial class Form1 : Form
 
             var filtered = allItems.AsEnumerable();
 
-            if (filterType == "Invoices") filtered = filtered.Where(x => x.EntityType == "Invoice");
-            else if (filterType == "Products") filtered = filtered.Where(x => x.EntityType == "Product");
-            else if (filterType == "Customers") filtered = filtered.Where(x => x.EntityType == "Customer");
-            else if (filterType == "Suppliers") filtered = filtered.Where(x => x.EntityType == "Supplier");
-            else if (filterType == "Expenses") filtered = filtered.Where(x => x.EntityType == "Expense");
-            else if (filterType == "Purchases") filtered = filtered.Where(x => x.EntityType == "Purchase");
+            if (filterType == "Invoices") filtered = filtered.Where(x => string.Equals(x.EntityType, "Invoice", StringComparison.OrdinalIgnoreCase));
+            else if (filterType == "Products") filtered = filtered.Where(x => string.Equals(x.EntityType, "Product", StringComparison.OrdinalIgnoreCase));
+            else if (filterType == "Customers") filtered = filtered.Where(x => string.Equals(x.EntityType, "Customer", StringComparison.OrdinalIgnoreCase));
+            else if (filterType == "Suppliers") filtered = filtered.Where(x => string.Equals(x.EntityType, "Supplier", StringComparison.OrdinalIgnoreCase));
+            else if (filterType == "Expenses") filtered = filtered.Where(x => string.Equals(x.EntityType, "Expense", StringComparison.OrdinalIgnoreCase));
+            else if (filterType == "Purchases") filtered = filtered.Where(x => string.Equals(x.EntityType, "Purchase", StringComparison.OrdinalIgnoreCase));
 
             if (!string.IsNullOrWhiteSpace(query))
             {
@@ -677,9 +680,9 @@ public partial class Form1 : Form
                 bool restored = false;
                 try
                 {
-                    switch (type.Trim())
+                    switch (type.Trim().ToLowerInvariant())
                     {
-                        case "Invoice":
+                        case "invoice":
                             {
                                 var obj = System.Text.Json.JsonSerializer.Deserialize<BillingSuite.App.Models.Invoice>(json, new System.Text.Json.JsonSerializerOptions
                                 {
@@ -712,7 +715,7 @@ public partial class Form1 : Form
                             }
                             break;
 
-                        case "Product":
+                        case "product":
                             {
                                 var obj = System.Text.Json.JsonSerializer.Deserialize<BillingSuite.App.Models.Product>(json);
                                 if (obj != null)
@@ -725,7 +728,7 @@ public partial class Form1 : Form
                             }
                             break;
 
-                        case "Customer":
+                        case "customer":
                             {
                                 var obj = System.Text.Json.JsonSerializer.Deserialize<BillingSuite.App.Models.Customer>(json);
                                 if (obj != null)
@@ -738,7 +741,7 @@ public partial class Form1 : Form
                             }
                             break;
 
-                        case "Supplier":
+                        case "supplier":
                             {
                                 var obj = System.Text.Json.JsonSerializer.Deserialize<BillingSuite.App.Models.Supplier>(json);
                                 if (obj != null)
@@ -751,7 +754,7 @@ public partial class Form1 : Form
                             }
                             break;
 
-                        case "Expense":
+                        case "expense":
                             {
                                 var obj = System.Text.Json.JsonSerializer.Deserialize<BillingSuite.App.Models.Expense>(json);
                                 if (obj != null)
@@ -764,7 +767,7 @@ public partial class Form1 : Form
                             }
                             break;
 
-                        case "Purchase":
+                        case "purchase":
                             {
                                 var obj = System.Text.Json.JsonSerializer.Deserialize<BillingSuite.App.Models.Purchase>(json, new System.Text.Json.JsonSerializerOptions
                                 {
@@ -836,8 +839,30 @@ public partial class Form1 : Form
                 var item = db.RecycleBin.FirstOrDefault(x => x.Id == bound.Id);
                 if (item != null)
                 {
+                    int delId = item.Id;
+                    int entId = item.EntityId;
+                    string entType = item.EntityType ?? "";
                     db.RecycleBin.Remove(item);
                     db.SaveChanges();
+
+                    _ = Task.Run(async () =>
+                    {
+                        try
+                        {
+                            var connStr = CloudDbConfig.GetConnectionString();
+                            if (string.IsNullOrWhiteSpace(connStr))
+                                connStr = AppSettingsService.SyncConnectionString?.Trim();
+                            if (!string.IsNullOrWhiteSpace(connStr))
+                            {
+                                var normalized = OnlineDatabaseService.NormalizeConnectionString(connStr);
+                                await using var conn = new Npgsql.NpgsqlConnection(normalized);
+                                await conn.OpenAsync();
+                                await using var cmd = new Npgsql.NpgsqlCommand($"DELETE FROM recycle_bin WHERE id = {delId} OR (LOWER(entity_type) = '{entType.ToLowerInvariant()}' AND entity_id = {entId});", conn);
+                                await cmd.ExecuteNonQueryAsync();
+                            }
+                        }
+                        catch { }
+                    });
                 }
                 Reload();
             }
@@ -860,6 +885,25 @@ public partial class Form1 : Form
                 {
                     db.RecycleBin.RemoveRange(all);
                     db.SaveChanges();
+
+                    _ = Task.Run(async () =>
+                    {
+                        try
+                        {
+                            var connStr = CloudDbConfig.GetConnectionString();
+                            if (string.IsNullOrWhiteSpace(connStr))
+                                connStr = AppSettingsService.SyncConnectionString?.Trim();
+                            if (!string.IsNullOrWhiteSpace(connStr))
+                            {
+                                var normalized = OnlineDatabaseService.NormalizeConnectionString(connStr);
+                                await using var conn = new Npgsql.NpgsqlConnection(normalized);
+                                await conn.OpenAsync();
+                                await using var cmd = new Npgsql.NpgsqlCommand("DELETE FROM recycle_bin;", conn);
+                                await cmd.ExecuteNonQueryAsync();
+                            }
+                        }
+                        catch { }
+                    });
                 }
                 Reload();
                 MessageBox.Show("Recycle Bin emptied successfully.", "Recycle Bin", MessageBoxButtons.OK, MessageBoxIcon.Information);
@@ -940,7 +984,10 @@ public partial class Form1 : Form
             }
             else if (tabControl1?.SelectedTab == tabPurchases)
             {
-                BuildPurchasesHomeUi();
+                if (tabPurchases.Tag is Action reload)
+                    reload();
+                else
+                    BuildPurchasesHomeUi();
             }
             else if (tabControl1?.SelectedTab == tabRecycleBin)
             {
@@ -3926,7 +3973,7 @@ public partial class Form1 : Form
         tsMarkPaid = new ToolStripButton("Mark invoice as 'Paid'"); tsMarkPaid.Click += (s,e)=> btnInvoiceAddPayment_Click(this, e);
         tsVoidInvoice = new ToolStripButton("Void Invoice"); tsVoidInvoice.Click += (s,e)=> MessageBox.Show("Void not implemented yet");
         tsSuppliers = new ToolStripButton("Suppliers"); tsSuppliers.Click += (s,e)=> { using var f = new SuppliersForm(); f.ShowDialog(this); };
-        tsSavePurchase = new ToolStripButton("Save Purchase"); tsSavePurchase.Click += (s,e)=> { using var f = new SavePurchaseForm(); f.ShowDialog(this); };
+        tsSavePurchase = new ToolStripButton("Save Purchase"); tsSavePurchase.Click += (s,e)=> { using var f = new BillingSuite.App.Forms.PurchaseEditForm(); f.ShowDialog(this); };
         tsInvoices.Items.AddRange(new ToolStripItem[] { tsNewInvoice, tsViewEditInvoice, tsDeleteInvoice, tsPreviewInvoice, tsPrintInvoice, tsEmailInvoice, tsSmsInvoice, tsMarkPaid, tsVoidInvoice, new ToolStripSeparator(), tsSuppliers, tsSavePurchase });
         tabInvoices.Controls.Add(tsInvoices);
 
@@ -4391,6 +4438,11 @@ public partial class Form1 : Form
     private void BuildPurchasesHomeUi()
     {
         if (tabPurchases == null) return;
+        if (tabPurchases.Controls.Count > 0 && tabPurchases.Tag is Action reload)
+        {
+            reload();
+            return;
+        }
         tabPurchases.Controls.Clear();
 
         // Master Layout
@@ -4458,10 +4510,30 @@ public partial class Form1 : Form
         gridPurchases.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "Id", DataPropertyName = "Id", Name = "Id", Visible = false });
         gridPurchases.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "Date", DataPropertyName = "PurchaseDate", Name = "PurchaseDate", FillWeight = 12, DefaultCellStyle = new DataGridViewCellStyle { Format = "dd/MM/yyyy" } });
         gridPurchases.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "Bill #", DataPropertyName = "InvoiceNumber", Name = "InvoiceNumber", FillWeight = 14 });
-        gridPurchases.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "Supplier", DataPropertyName = "Supplier", Name = "Supplier", FillWeight = 28 });
+        gridPurchases.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "Supplier", DataPropertyName = "Supplier", Name = "Supplier", FillWeight = 24 });
+        gridPurchases.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "Status", DataPropertyName = "Status", Name = "Status", FillWeight = 10 });
         gridPurchases.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "Subtotal", DataPropertyName = "Subtotal", Name = "Subtotal", FillWeight = 12, DefaultCellStyle = new DataGridViewCellStyle { Format = "0.00", Alignment = DataGridViewContentAlignment.MiddleRight } });
         gridPurchases.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "Total", DataPropertyName = "Total", Name = "Total", FillWeight = 12, DefaultCellStyle = new DataGridViewCellStyle { Format = "0.00", Alignment = DataGridViewContentAlignment.MiddleRight } });
         gridPurchases.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "SupplierId", DataPropertyName = "SupplierId", Name = "SupplierId", Visible = false });
+
+        gridPurchases.CellFormatting += (s, e) =>
+        {
+            if (e.RowIndex < 0 || e.ColumnIndex < 0) return;
+            if (gridPurchases.Columns[e.ColumnIndex].Name == "Status" && e.Value != null)
+            {
+                var val = e.Value.ToString();
+                if (string.Equals(val, "Draft", StringComparison.OrdinalIgnoreCase))
+                {
+                    e.CellStyle.ForeColor = Color.DarkOrange;
+                    e.CellStyle.Font = new Font(gridPurchases.Font, FontStyle.Bold);
+                }
+                else
+                {
+                    e.CellStyle.ForeColor = Color.FromArgb(20, 120, 60);
+                    e.CellStyle.Font = new Font(gridPurchases.Font, FontStyle.Bold);
+                }
+            }
+        };
 
         var pnlHost = new Panel { Dock = DockStyle.Fill, Margin = new Padding(0), Padding = new Padding(0, 0, 0, 0) };
         pnlHost.Controls.Add(gridPurchases);
@@ -4601,6 +4673,7 @@ public partial class Form1 : Form
 
         void LoadPurchases()
         {
+            int? prevSelectedId = SelectedPurchaseId();
             using var db = new AppDbContext();
             var data = (
                 from p in db.Purchases
@@ -4613,6 +4686,7 @@ public partial class Form1 : Form
                     p.PurchaseDate,
                     p.InvoiceNumber,
                     Supplier = s != null ? s.Name : string.Empty,
+                    Status = string.IsNullOrWhiteSpace(p.Status) ? "Saved" : p.Status,
                     p.Subtotal,
                     p.Total,
                     p.SupplierId
@@ -4626,18 +4700,30 @@ public partial class Form1 : Form
             }
             gridPurchases.DataSource = data;
             UpdateFooter();
+
+            // Restore selection if previously selected, otherwise select row 0
+            bool selectionRestored = false;
+            if (prevSelectedId.HasValue && gridPurchases.Rows.Count > 0)
+            {
+                foreach (DataGridViewRow r in gridPurchases.Rows)
+                {
+                    if (r.Cells["Id"]?.Value is int id && id == prevSelectedId.Value)
+                    {
+                        gridPurchases.ClearSelection();
+                        r.Selected = true;
+                        try { gridPurchases.CurrentCell = r.Cells[gridPurchases.Columns["PurchaseDate"].Index]; } catch { }
+                        selectionRestored = true;
+                        break;
+                    }
+                }
+            }
+            if (!selectionRestored && gridPurchases.Rows.Count > 0)
+            {
+                try { gridPurchases.ClearSelection(); gridPurchases.Rows[0].Selected = true; gridPurchases.CurrentCell = gridPurchases.Rows[0].Cells[gridPurchases.Columns["PurchaseDate"].Index]; } catch { }
+            }
+
             LoadItemsForSelected();
             LoadPaymentsForSelected();
-            // Ensure a row is selected so bottom panels populate without manual click
-            try { if (gridPurchases.Rows.Count > 0) { gridPurchases.ClearSelection(); gridPurchases.Rows[0].Selected = true; gridPurchases.CurrentCell = gridPurchases.Rows[0].Cells[gridPurchases.Columns["PurchaseDate"].Index]; } } catch { }
-            // After binding and layout, finalize splitter distance to avoid header clipping
-            try { split.PerformLayout(); tabPurchases.PerformLayout(); } catch { }
-            try
-            {
-                var usable = split.Height;
-                split.SplitterDistance = Math.Max(140, Math.Min(usable - 180, (int)(usable * 0.6)));
-            }
-            catch { }
         }
 
         void CreatePurchase()
@@ -4662,89 +4748,20 @@ public partial class Form1 : Form
         void DeletePurchase()
         {
             var id = SelectedPurchaseId(); if (id == null) return;
-            if (MessageBox.Show("Delete selected purchase?", "Confirm", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
-            // Ask if stock should be subtracted as well
-            var adj = MessageBox.Show("Also subtract purchased item quantities from stock?", "Adjust Stock", MessageBoxButtons.YesNoCancel, MessageBoxIcon.Question);
-            if (adj == DialogResult.Cancel) return;
             using var db = new AppDbContext();
             var p = db.Purchases.FirstOrDefault(x => x.Id == id); if (p == null) return;
+            if (MessageBox.Show("Delete selected purchase?", "Confirm", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
+            
+            bool isDraft = string.Equals(p.Status, "Draft", StringComparison.OrdinalIgnoreCase);
             var items = db.PurchaseItems.Where(i => i.PurchaseId == p.Id).ToList();
-            // Always handle batch detail rollback logic irrespective of stock choice
-            try
+
+            if (!isDraft)
             {
-                foreach (var it in items)
-                {
-                    int? prodId = it.ProductId;
-                    Models.Product? prod = null;
-                    if (prodId.HasValue) prod = db.Products.FirstOrDefault(pr => pr.Id == prodId.Value);
-                    if (prod == null && !string.IsNullOrWhiteSpace(it.ProductName))
-                        prod = db.Products.FirstOrDefault(pr => pr.Name.ToLower() == (it.ProductName ?? string.Empty).ToLower());
-                    if (prod == null) continue;
+                // Ask if stock should be subtracted as well
+                var adj = MessageBox.Show("Also subtract purchased item quantities from stock?", "Adjust Stock", MessageBoxButtons.YesNoCancel, MessageBoxIcon.Question);
+                if (adj == DialogResult.Cancel) return;
 
-                    var batchCode = it.BatchNumber?.Trim();
-                    if (string.IsNullOrWhiteSpace(batchCode)) continue;
-
-                    // Determine if there exists any later purchase for this product+batch
-                    var laterExists = (from pi in db.PurchaseItems
-                                       join pu in db.Purchases on pi.PurchaseId equals pu.Id
-                                       where ((pi.ProductId != null && pi.ProductId == prod.Id) || (pi.ProductId == null && (pi.ProductName ?? "") == (prod.Name ?? "")))
-                                             && (pi.BatchNumber ?? "") == batchCode
-                                             && (pu.PurchaseDate > p.PurchaseDate || (pu.PurchaseDate == p.PurchaseDate && pu.Id > p.Id))
-                                       select pi.Id).Any();
-                    if (laterExists)
-                    {
-                        // A later purchase exists; keep latest details as-is
-                        continue;
-                    }
-
-                    // Find previous purchase (before current) for same product+batch
-                    var prev = (from pi in db.PurchaseItems
-                                join pu in db.Purchases on pi.PurchaseId equals pu.Id
-                                where ((pi.ProductId != null && pi.ProductId == prod.Id) || (pi.ProductId == null && (pi.ProductName ?? "") == (prod.Name ?? "")))
-                                      && (pi.BatchNumber ?? "") == batchCode
-                                      && (pu.PurchaseDate < p.PurchaseDate || (pu.PurchaseDate == p.PurchaseDate && pu.Id < p.Id))
-                                orderby pu.PurchaseDate descending, pu.Id descending
-                                select new { pi.Mrp, pi.CostPrice, pi.SellingPrice, pi.Expiry, pi.Pack, pi.MarketedBy, pi.Bonus }).FirstOrDefault();
-
-                    var pb = db.ProductBatches.FirstOrDefault(b => b.ProductIdRef == prod.Id && b.BatchNumber == batchCode);
-                    if (prev != null)
-                    {
-                        if (pb == null)
-                        {
-                            pb = new Models.ProductBatch
-                            {
-                                ProductIdRef = prod.Id,
-                                BatchNumber = batchCode,
-                                UpdatedAt = DateTime.UtcNow
-                            };
-                            db.ProductBatches.Add(pb);
-                        }
-                        pb.Mrp = prev.Mrp;
-                        pb.CostPrice = prev.CostPrice;
-                        pb.SellingPrice = prev.SellingPrice ?? pb.SellingPrice;
-                        pb.Expiry = prev.Expiry;
-                        if (!string.IsNullOrWhiteSpace(prev.Pack)) pb.Pack = prev.Pack;
-                        if (!string.IsNullOrWhiteSpace(prev.MarketedBy)) pb.MarketedBy = prev.MarketedBy;
-                        if (!string.IsNullOrWhiteSpace(prev.Bonus)) pb.Bonus = prev.Bonus;
-                        pb.UpdatedAt = DateTime.UtcNow;
-                    }
-                    else
-                    {
-                        // No previous purchase: clear batch detail fields but keep record
-                        if (pb != null)
-                        {
-                            pb.Mrp = null; pb.CostPrice = null; pb.SellingPrice = pb.SellingPrice; // keep selling if used elsewhere
-                            pb.Expiry = null; pb.Pack = pb.Pack; pb.MarketedBy = pb.MarketedBy; pb.Bonus = pb.Bonus;
-                            pb.UpdatedAt = DateTime.UtcNow;
-                        }
-                    }
-                }
-                db.SaveChanges();
-            }
-            catch { }
-
-            if (adj == DialogResult.Yes)
-            {
+                // Handle batch detail rollback logic
                 try
                 {
                     foreach (var it in items)
@@ -4757,34 +4774,182 @@ public partial class Form1 : Form
                         if (prod == null) continue;
 
                         var batchCode = it.BatchNumber?.Trim();
-                        if (!string.IsNullOrWhiteSpace(batchCode))
+                        if (string.IsNullOrWhiteSpace(batchCode)) continue;
+
+                        // Determine if there exists any later purchase for this product+batch
+                        var laterExists = (from pi in db.PurchaseItems
+                                           join pu in db.Purchases on pi.PurchaseId equals pu.Id
+                                           where ((pi.ProductId != null && pi.ProductId == prod.Id) || (pi.ProductId == null && (pi.ProductName ?? "") == (prod.Name ?? "")))
+                                                 && (pi.BatchNumber ?? "") == batchCode
+                                                 && (pu.PurchaseDate > p.PurchaseDate || (pu.PurchaseDate == p.PurchaseDate && pu.Id > p.Id))
+                                           select pi.Id).Any();
+                        if (laterExists)
                         {
-                            var pb = db.ProductBatches.FirstOrDefault(b => b.ProductIdRef == prod.Id && b.BatchNumber == batchCode);
+                            // A later purchase exists; keep latest details as-is
+                            continue;
+                        }
+
+                        // Find previous purchase (before current) for same product+batch
+                        var prev = (from pi in db.PurchaseItems
+                                    join pu in db.Purchases on pi.PurchaseId equals pu.Id
+                                    where ((pi.ProductId != null && pi.ProductId == prod.Id) || (pi.ProductId == null && (pi.ProductName ?? "") == (prod.Name ?? "")))
+                                          && (pi.BatchNumber ?? "") == batchCode
+                                          && (pu.PurchaseDate < p.PurchaseDate || (pu.PurchaseDate == p.PurchaseDate && pu.Id < p.Id))
+                                    orderby pu.PurchaseDate descending, pu.Id descending
+                                    select new { pi.Mrp, pi.CostPrice, pi.SellingPrice, pi.Expiry, pi.Pack, pi.MarketedBy, pi.Bonus }).FirstOrDefault();
+
+                        var pb = db.ProductBatches.FirstOrDefault(b => b.ProductIdRef == prod.Id && b.BatchNumber == batchCode);
+                        if (prev != null)
+                        {
+                            if (pb == null)
+                            {
+                                pb = new Models.ProductBatch
+                                {
+                                    ProductIdRef = prod.Id,
+                                    BatchNumber = batchCode,
+                                    UpdatedAt = DateTime.UtcNow
+                                };
+                                db.ProductBatches.Add(pb);
+                            }
+                            pb.Mrp = prev.Mrp;
+                            pb.CostPrice = prev.CostPrice;
+                            pb.SellingPrice = prev.SellingPrice ?? pb.SellingPrice;
+                            pb.Expiry = prev.Expiry;
+                            if (!string.IsNullOrWhiteSpace(prev.Pack)) pb.Pack = prev.Pack;
+                            if (!string.IsNullOrWhiteSpace(prev.MarketedBy)) pb.MarketedBy = prev.MarketedBy;
+                            if (!string.IsNullOrWhiteSpace(prev.Bonus)) pb.Bonus = prev.Bonus;
+                            pb.UpdatedAt = DateTime.UtcNow;
+                        }
+                        else
+                        {
+                            // No previous purchase: clear batch detail fields but keep record
                             if (pb != null)
                             {
-                                var prev = pb.Stock ?? 0m;
-                                pb.Stock = Math.Max(0m, prev - (it.Quantity));
+                                pb.Mrp = null; pb.CostPrice = null; pb.SellingPrice = pb.SellingPrice; // keep selling if used elsewhere
+                                pb.Expiry = null; pb.Pack = pb.Pack; pb.MarketedBy = pb.MarketedBy; pb.Bonus = pb.Bonus;
                                 pb.UpdatedAt = DateTime.UtcNow;
-                            }
-                            else
-                            {
-                                // Legacy fallback: adjust matching legacy stock fields
-                                if (string.Equals(batchCode, prod.NewBatch, StringComparison.OrdinalIgnoreCase) && prod.NewStock.HasValue)
-                                    prod.NewStock = Math.Max(0m, (prod.NewStock ?? 0m) - it.Quantity);
-                                else if (string.Equals(batchCode, prod.OldBatch, StringComparison.OrdinalIgnoreCase) && prod.OldStock.HasValue)
-                                    prod.OldStock = Math.Max(0m, (prod.OldStock ?? 0m) - it.Quantity);
-                                else if (string.Equals(batchCode, prod.VeryOldBatch, StringComparison.OrdinalIgnoreCase) && prod.VeryOldStock.HasValue)
-                                    prod.VeryOldStock = Math.Max(0m, (prod.VeryOldStock ?? 0m) - it.Quantity);
                             }
                         }
                     }
                     db.SaveChanges();
                 }
                 catch { }
+
+                if (adj == DialogResult.Yes)
+                {
+                    try
+                    {
+                        foreach (var it in items)
+                        {
+                            int? prodId = it.ProductId;
+                            Models.Product? prod = null;
+                            if (prodId.HasValue) prod = db.Products.FirstOrDefault(pr => pr.Id == prodId.Value);
+                            if (prod == null && !string.IsNullOrWhiteSpace(it.ProductName))
+                                prod = db.Products.FirstOrDefault(pr => pr.Name.ToLower() == (it.ProductName ?? string.Empty).ToLower());
+                            if (prod == null) continue;
+
+                            var batchCode = it.BatchNumber?.Trim();
+                            if (!string.IsNullOrWhiteSpace(batchCode))
+                            {
+                                var pb = db.ProductBatches.FirstOrDefault(b => b.ProductIdRef == prod.Id && b.BatchNumber == batchCode);
+                                if (pb != null)
+                                {
+                                    var prev = pb.Stock ?? 0m;
+                                    pb.Stock = Math.Max(0m, prev - (it.Quantity));
+                                    pb.UpdatedAt = DateTime.UtcNow;
+                                }
+                                else
+                                {
+                                    // Legacy fallback: adjust matching legacy stock fields
+                                    if (string.Equals(batchCode, prod.NewBatch, StringComparison.OrdinalIgnoreCase) && prod.NewStock.HasValue)
+                                        prod.NewStock = Math.Max(0m, (prod.NewStock ?? 0m) - it.Quantity);
+                                    else if (string.Equals(batchCode, prod.OldBatch, StringComparison.OrdinalIgnoreCase) && prod.OldStock.HasValue)
+                                        prod.OldStock = Math.Max(0m, (prod.OldStock ?? 0m) - it.Quantity);
+                                    else if (string.Equals(batchCode, prod.VeryOldBatch, StringComparison.OrdinalIgnoreCase) && prod.VeryOldStock.HasValue)
+                                        prod.VeryOldStock = Math.Max(0m, (prod.VeryOldStock ?? 0m) - it.Quantity);
+                                }
+                            }
+                        }
+                        db.SaveChanges();
+                    }
+                    catch { }
+                }
             }
+
+            p.Items = items;
+            if (p.Supplier == null && p.SupplierId > 0)
+            {
+                try { p.Supplier = db.Suppliers.FirstOrDefault(s => s.Id == p.SupplierId); } catch { }
+            }
+
+            var payments = db.PurchasePayments.Where(x => x.PurchaseId == p.Id).ToList();
+
+            string json = "";
+            try
+            {
+                json = System.Text.Json.JsonSerializer.Serialize(p, new System.Text.Json.JsonSerializerOptions
+                {
+                    ReferenceHandler = System.Text.Json.Serialization.ReferenceHandler.IgnoreCycles,
+                    WriteIndented = false
+                });
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine("[DeletePurchase] JSON Serialize error: " + ex.Message);
+                json = "{}";
+            }
+
+            var rbItem = new RecycleBinItem
+            {
+                EntityType = "Purchase",
+                EntityId = p.Id,
+                JsonData = json,
+                OwnerUserId = p.OwnerUserId,
+                DeletedAt = DateTime.UtcNow
+            };
+
+            try
+            {
+                db.RecycleBin.Add(rbItem);
+            }
+            catch { }
+
+            if (payments.Count > 0) db.PurchasePayments.RemoveRange(payments);
             db.PurchaseItems.RemoveRange(items);
             db.Purchases.Remove(p);
             db.SaveChanges();
+
+            int deletedPurchaseId = p.Id;
+            int? ownerId = p.OwnerUserId;
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    var connStr = CloudDbConfig.GetConnectionString();
+                    if (string.IsNullOrWhiteSpace(connStr))
+                        connStr = AppSettingsService.SyncConnectionString?.Trim();
+                    if (!string.IsNullOrWhiteSpace(connStr))
+                    {
+                        var normalized = OnlineDatabaseService.NormalizeConnectionString(connStr);
+                        await using var conn = new Npgsql.NpgsqlConnection(normalized);
+                        await conn.OpenAsync();
+                        var sql = $"DELETE FROM purchases WHERE id = {deletedPurchaseId}; " +
+                                  $"DELETE FROM purchase_items WHERE purchase_id = {deletedPurchaseId}; " +
+                                  $"DELETE FROM purchase_payments WHERE purchase_id = {deletedPurchaseId}; " +
+                                  $"INSERT INTO recycle_bin (id, entity_type, entity_id, json_data, owner_user_id, deleted_at) " +
+                                  $"VALUES (@id, 'Purchase', {deletedPurchaseId}, @json, @owner, @deleted_at) ON CONFLICT (id) DO NOTHING;";
+                        await using var cmd = new Npgsql.NpgsqlCommand(sql, conn);
+                        cmd.Parameters.AddWithValue("id", rbItem.Id > 0 ? rbItem.Id : deletedPurchaseId);
+                        cmd.Parameters.AddWithValue("json", json);
+                        cmd.Parameters.AddWithValue("owner", (object?)ownerId ?? DBNull.Value);
+                        cmd.Parameters.AddWithValue("deleted_at", DateTime.UtcNow);
+                        await cmd.ExecuteNonQueryAsync();
+                    }
+                }
+                catch { }
+                SyncService.QueueInstantSync(500);
+            });
+
             LoadPurchases();
         }
 
@@ -4837,6 +5002,17 @@ public partial class Form1 : Form
             if (MessageBox.Show("Delete selected payment?", "Confirm", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return;
             using var db = new AppDbContext();
             var p = db.PurchasePayments.FirstOrDefault(x => x.Id == payId); if (p == null) return;
+            try
+            {
+                db.RecycleBin.Add(new RecycleBinItem
+                {
+                    EntityType = "purchase_payment",
+                    EntityId = p.Id,
+                    JsonData = System.Text.Json.JsonSerializer.Serialize(p),
+                    DeletedAt = DateTime.UtcNow
+                });
+            }
+            catch { }
             db.PurchasePayments.Remove(p);
             db.SaveChanges();
             RecalcPaidDue(pid.Value);
