@@ -89,6 +89,25 @@ When reporting, please include:
 - Secrets are loaded at runtime from configuration — never committed to the repository.
 - The `.gitignore` excludes build outputs, local configuration files, and sensitive artifacts.
 
+### 🔒 Brute-Force & Rate Limiting Protection
+
+- In-process rate limiting via `LoginRateLimiter` enforces lockout against automated credential stuffing.
+- After **5 consecutive failed attempts** for any account, sign-in is blocked for **5 minutes**.
+- Subsequent lockout windows use exponential backoff (5 → 10 → 20 → 40 → 60 minutes).
+- Live countdown timer is presented in the UI showing remaining lockout time.
+- Successful sign-in clears the failure counter immediately.
+
+### 📋 Security Audit Logging
+
+- Append-only security audit trail implemented via `AuditLogService`.
+- Events are written to daily rotating log files in `%LOCALAPPDATA%\BillingSuite\audit_logs\audit_YYYY-MM-DD.log`.
+- Tracks critical security events: `LOGIN_SUCCESS`, `LOGIN_FAILED`, `LOGIN_LOCKOUT`, `LOGOUT`, `PASSWORD_CHANGE`, and `ACCOUNT_CREATED`.
+
+### ⏱️ Session Management (Offline POS Design)
+
+- Designed specifically for retail counters and billing desks: sessions remain persistent throughout active business hours to avoid disruptive auto-lockouts during peak billing rushes.
+- Users can manually sign out or switch accounts anytime from the Settings panel.
+
 ---
 
 ## Known Security Considerations
@@ -100,10 +119,10 @@ When reporting, please include:
 | OTP expiry | ✅ Implemented | 10-minute expiry, CSPRNG |
 | Data isolation | ✅ Enforced | Per-user EF query filters |
 | Transport encryption | ✅ HTTPS only | TLS for all cloud calls |
-| Database encryption at rest | ⚠️ OS-level | Relies on BitLocker / OS encryption |
-| Session management | ⚠️ Single-device | Session stored in app settings; no token revocation |
-| Brute-force protection | ⚠️ None | No login rate-limiting or lockout (offline app) |
-| Audit logging | ⚠️ Partial | Recycle bin tracks deletions; no full audit trail |
+| Brute-force protection | ✅ Implemented | 5 attempts → 5-min lockout, exponential back-off up to 60 min with UI countdown |
+| Audit logging | ✅ Implemented | Append-only security audit trail in `%LOCALAPPDATA%\BillingSuite\audit_logs\` |
+| Database encryption at rest | ⚠️ OS-level | Relies on BitLocker / OS disk encryption |
+| Session management | ℹ️ POS Mode | Persistent local session by design (no auto-timeout to prevent billing interruption) |
 
 ---
 

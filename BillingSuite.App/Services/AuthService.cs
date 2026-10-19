@@ -27,10 +27,12 @@ namespace BillingSuite.App.Services
 
         public static void SignOut()
         {
+            var prevEmail = CurrentUser?.Email;
             CurrentUser = null;
             try
             {
                 AppSettingsService.Set("ActiveSessionUserId", "0");
+                AuditLogService.Log(AuditLogService.Events.Logout, prevEmail);
             }
             catch { }
         }
@@ -433,6 +435,7 @@ namespace BillingSuite.App.Services
                 CurrentUser = user;
                 AppSettingsService.Set("ActiveSessionUserId", user.Id.ToString());
                 SyncUserProfileToSettings(user);
+                try { AuditLogService.Log(AuditLogService.Events.AccountCreated, email); } catch { }
                 if (db.Users.Count() <= 1)
                 {
                     DatabaseUtils.ClaimLegacyUnownedData(user.Id);
@@ -549,6 +552,7 @@ namespace BillingSuite.App.Services
                         CurrentUser = user;
                         AppSettingsService.Set("ActiveSessionUserId", user.Id.ToString());
                         SyncUserProfileToSettings(user);
+                        try { AuditLogService.Log(AuditLogService.Events.LoginSuccess, email, "Supabase Auth"); } catch { }
                         if (db.Users.Count() <= 1)
                         {
                             DatabaseUtils.ClaimLegacyUnownedData(user.Id);
@@ -628,7 +632,10 @@ namespace BillingSuite.App.Services
                         return (false, "This account has been disabled.");
 
                     if (!Verify(password, localUser))
+                    {
+                        try { AuditLogService.Log(AuditLogService.Events.LoginFailed, email, "Incorrect password (offline)"); } catch { }
                         return (false, "Incorrect email or password.");
+                    }
 
                     localUser.LastLoginAt = DateTime.UtcNow;
                     await dbOffline.SaveChangesAsync();
@@ -637,6 +644,7 @@ namespace BillingSuite.App.Services
                 CurrentUser = localUser;
                 AppSettingsService.Set("ActiveSessionUserId", localUser.Id.ToString());
                 SyncUserProfileToSettings(localUser);
+                try { AuditLogService.Log(AuditLogService.Events.LoginSuccess, email, "Local/Cloud Database"); } catch { }
                 if (dbOffline.Users.Count() <= 1)
                 {
                     DatabaseUtils.ClaimLegacyUnownedData(localUser.Id);
@@ -695,6 +703,7 @@ namespace BillingSuite.App.Services
                 db.SaveChanges();
 
                 if (CurrentUser != null && CurrentUser.Id == userId) CurrentUser = user;
+                try { AuditLogService.Log(AuditLogService.Events.PasswordChange, user.Email); } catch { }
 
                 var connStr = CloudDbConfig.GetConnectionString();
                 if (!string.IsNullOrWhiteSpace(connStr) && SyncService.IsNetworkAvailable())

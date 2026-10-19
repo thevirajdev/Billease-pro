@@ -26,6 +26,10 @@ namespace BillingSuite.App.Forms
         private readonly System.Windows.Forms.Timer _forgotResendTimer = new();
         private int _forgotCooldown = 0;
 
+        // Rate-limit countdown timer shown during lockout
+        private readonly System.Windows.Forms.Timer _lockoutTimer = new() { Interval = 1000 };
+        private string _lockoutEmail = string.Empty;
+
         private Panel pnlHeader = new();
         private Label lblHeaderTitle = new();
         private Label lblHeaderSub = new();
@@ -87,6 +91,8 @@ namespace BillingSuite.App.Forms
 
             _forgotResendTimer.Interval = 1000;
             _forgotResendTimer.Tick += ForgotResendTimer_Tick;
+
+            _lockoutTimer.Tick += LockoutTimer_Tick;
 
             BuildUi();
         }
@@ -574,6 +580,40 @@ namespace BillingSuite.App.Forms
             _forgotResendTimer.Start();
         }
 
+        private void LockoutTimer_Tick(object? sender, EventArgs e)
+        {
+            if (string.IsNullOrWhiteSpace(_lockoutEmail))
+            {
+                _lockoutTimer.Stop();
+                btnSignIn.Enabled = true;
+                return;
+            }
+
+            var (allowed, waitSeconds, _) = LoginRateLimiter.Check(_lockoutEmail);
+            if (allowed)
+            {
+                _lockoutTimer.Stop();
+                btnSignIn.Enabled = true;
+                lblSignInStatus.ForeColor = Color.DarkSlateBlue;
+                lblSignInStatus.Text = "Lockout expired. You can now sign in.";
+            }
+            else
+            {
+                btnSignIn.Enabled = false;
+                lblSignInStatus.ForeColor = Color.Firebrick;
+                if (waitSeconds >= 60)
+                {
+                    int mins = waitSeconds / 60;
+                    int secs = waitSeconds % 60;
+                    lblSignInStatus.Text = $"Too many failed attempts. Try again in {mins}m {secs}s.";
+                }
+                else
+                {
+                    lblSignInStatus.Text = $"Too many failed attempts. Try again in {waitSeconds}s.";
+                }
+            }
+        }
+
         // =========================================================================
         // ASYNCHRONOUS EVENT HANDLERS
         // =========================================================================
@@ -592,6 +632,19 @@ namespace BillingSuite.App.Forms
                 return;
             }
 
+            // Check rate limiting before calling authentication
+            var (allowed, waitSeconds, attemptsLeft) = LoginRateLimiter.Check(email);
+            if (!allowed)
+            {
+                _lockoutEmail = email;
+                btnSignIn.Enabled = false;
+                _lockoutTimer.Start();
+                LockoutTimer_Tick(null, EventArgs.Empty);
+                try { AuditLogService.Log(AuditLogService.Events.LoginLockout, email, "Blocked by rate limiter"); } catch { }
+                return;
+            }
+
+            bool isLockedOut = false;
             btnSignIn.Enabled = false;
             btnSignIn.Text = "Signing in...";
             lblSignInStatus.ForeColor = Color.DarkSlateBlue;
@@ -602,19 +655,46 @@ namespace BillingSuite.App.Forms
                 var (ok, error) = await AuthService.SignInAsync(email, pass);
                 if (!ok)
                 {
+                    LoginRateLimiter.RecordFailure(email);
+                    var postCheck = LoginRateLimiter.Check(email);
+
+                    if (!postCheck.allowed)
+                    {
+                        isLockedOut = true;
+                        _lockoutEmail = email;
+                        btnSignIn.Enabled = false;
+                        _lockoutTimer.Start();
+                        LockoutTimer_Tick(null, EventArgs.Empty);
+                        return;
+                    }
+
                     lblSignInStatus.ForeColor = Color.Firebrick;
-                    lblSignInStatus.Text = error;
+                    if (postCheck.attemptsLeft <= 2)
+                    {
+                        lblSignInStatus.Text = $"{error} ({postCheck.attemptsLeft} attempt(s) remaining before temporary lockout)";
+                    }
+                    else
+                    {
+                        lblSignInStatus.Text = error;
+                    }
+
                     txtSignInPassword.SelectAll();
                     txtSignInPassword.Focus();
                     return;
                 }
+
+                LoginRateLimiter.RecordSuccess(email);
+                _lockoutTimer.Stop();
 
                 DialogResult = DialogResult.OK;
                 Close();
             }
             finally
             {
-                btnSignIn.Enabled = true;
+                if (!isLockedOut)
+                {
+                    btnSignIn.Enabled = true;
+                }
                 btnSignIn.Text = "Sign In";
             }
         }
