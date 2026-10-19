@@ -1311,6 +1311,9 @@ namespace BillingSuite.App.Forms
                 decimal subtotal = 0m;
                 bool hasAnyRow = false;
                 var savedRows = new List<(DataGridViewRow row, PurchaseItem item)>();
+                // Collect metadata that needs post-save syncing (avoiding SaveChanges inside the loop)
+                var mktSyncList = new List<(int ProductId, string Mkt)>();
+                bool needsExpiredStockSync = !asDraft;
 
                 foreach (DataGridViewRow row in gridItems.Rows)
                 {
@@ -1352,15 +1355,12 @@ namespace BillingSuite.App.Forms
                         ApplyPurchaseToProduct(db, prod, new TempRow(batch, mrp, exp, cost, qty, pack, mkt, bonus, sell, rate, disc, cgst, sgst, igst));
                     }
                     // Draft: purchase + items saved but stock/batches NOT touched until final save
-                    
-                    // Sync updated metadata (MarketedBy) ONLY IF NOT EMPTY and check expiry globally
+
+                    // Queue metadata sync for after the main SaveChanges — calling SyncProductMetadata/SyncExpiredStock
+                    // inside this loop caused intermittent EF tracking conflicts (they call SaveChanges internally).
                     if (!asDraft && !string.IsNullOrWhiteSpace(mkt))
                     {
-                        InventoryService.SyncProductMetadata(db, prod.Id, mkt);
-                    }
-                    if (!asDraft)
-                    {
-                        InventoryService.SyncExpiredStock(db);
+                        mktSyncList.Add((prod.Id, mkt));
                     }
 
                     int? existingItemId = null;
@@ -1414,6 +1414,24 @@ namespace BillingSuite.App.Forms
                 foreach (var (r, item) in savedRows)
                 {
                     r.Cells["colId"].Value = item.Id;
+                }
+
+                // Post-save: run metadata sync + expired stock in a FRESH context to avoid tracking conflicts
+                if (mktSyncList.Count > 0 || needsExpiredStockSync)
+                {
+                    try
+                    {
+                        using var syncDb = new AppDbContext();
+                        foreach (var (pid, mkt) in mktSyncList)
+                        {
+                            try { InventoryService.SyncProductMetadata(syncDb, pid, mkt); } catch { }
+                        }
+                        if (needsExpiredStockSync)
+                        {
+                            try { InventoryService.SyncExpiredStock(syncDb); } catch { }
+                        }
+                    }
+                    catch { }
                 }
 
                 Model = p;
