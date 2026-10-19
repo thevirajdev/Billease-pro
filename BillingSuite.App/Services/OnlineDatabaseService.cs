@@ -703,7 +703,7 @@ namespace BillingSuite.App.Services
                 catch { }
 
                 var pushDeletedPurIds = await db.RecycleBin.IgnoreQueryFilters()
-                    .Where(r => r.EntityType != null && string.Equals(r.EntityType.Trim(), "Purchase", StringComparison.OrdinalIgnoreCase))
+                    .Where(r => r.EntityType != null && r.EntityType.ToLower() == "purchase")
                     .Select(r => r.EntityId)
                     .ToListAsync();
                 var pushDeletedPurSet = new HashSet<int>(pushDeletedPurIds);
@@ -1533,7 +1533,7 @@ namespace BillingSuite.App.Services
                 catch { }
 
                 var localDeletedPurchases = await db.RecycleBin.IgnoreQueryFilters()
-                    .Where(r => r.EntityType != null && string.Equals(r.EntityType.Trim(), "Purchase", StringComparison.OrdinalIgnoreCase))
+                    .Where(r => r.EntityType != null && r.EntityType.ToLower() == "purchase")
                     .Select(r => r.EntityId)
                     .ToListAsync();
                 var allDeletedPurSet = new HashSet<int>(localDeletedPurchases);
