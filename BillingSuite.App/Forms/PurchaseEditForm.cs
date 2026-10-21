@@ -1221,6 +1221,7 @@ namespace BillingSuite.App.Forms
                 using var db = new AppDbContext();
                 var p = Model?.Id > 0 ? db.Purchases.FirstOrDefault(x => x.Id == Model.Id) : null;
                 if (p == null) { p = new Purchase(); db.Purchases.Add(p); }
+                p.OwnerUserId = p.OwnerUserId ?? AuthService.CurrentUser?.Id;
 
                 bool wasPreviouslySaved = (p.Id > 0 && !string.Equals(p.Status, "Draft", StringComparison.OrdinalIgnoreCase));
 
@@ -1379,6 +1380,7 @@ namespace BillingSuite.App.Forms
                     }
 
                     it.PurchaseId = p.Id;
+                    it.OwnerUserId = p.OwnerUserId ?? AuthService.CurrentUser?.Id;
                     it.ProductId = prod.Id;
                     it.ProductName = prod.Name;
                     it.BatchNumber = batch;
@@ -1718,13 +1720,13 @@ namespace BillingSuite.App.Forms
                 using var db = new AppDbContext();
                 if (existing == null)
                 {
-                    var pay = new PurchasePayment { PurchaseId = Model.Id, Date = dt.Value.Date, Method = txtMethod.Text?.Trim(), Amount = numAmt.Value, Notes = txtNote.Text?.Trim() };
+                    var pay = new PurchasePayment { PurchaseId = Model.Id, Date = dt.Value.Date, Method = txtMethod.Text?.Trim(), Amount = numAmt.Value, Notes = txtNote.Text?.Trim(), OwnerUserId = AuthService.CurrentUser?.Id };
                     db.PurchasePayments.Add(pay);
                 }
                 else
                 {
                     var pay = db.PurchasePayments.FirstOrDefault(x => x.Id == existing.Id);
-                    if (pay != null) { pay.Date = dt.Value.Date; pay.Method = txtMethod.Text?.Trim(); pay.Amount = numAmt.Value; pay.Notes = txtNote.Text?.Trim(); }
+                    if (pay != null) { pay.Date = dt.Value.Date; pay.Method = txtMethod.Text?.Trim(); pay.Amount = numAmt.Value; pay.Notes = txtNote.Text?.Trim(); pay.OwnerUserId = pay.OwnerUserId ?? AuthService.CurrentUser?.Id; }
                 }
                 db.SaveChanges();
                 RefreshPaymentsAndSummary();

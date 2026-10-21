@@ -59,6 +59,8 @@ static class Program
             {
                 var schemaRes = Services.OnlineDatabaseService.EnsureSchemaAsync(connStr).GetAwaiter().GetResult();
                 Console.WriteLine(schemaRes.Success ? "SCHEMA SUCCESS: " + schemaRes.Message : "SCHEMA FAILED: " + schemaRes.Message);
+
+
             }
             return;
         }
@@ -70,7 +72,7 @@ static class Program
             Console.WriteLine("Testing PullFromCloudAsync...");
             try
             {
-                var (pullOk, pullMsg) = Services.OnlineDatabaseService.PullFromCloudAsync(connStr, 1, (status, pct) =>
+                var (pullOk, pullMsg) = Services.OnlineDatabaseService.PullFromCloudAsync(connStr, Services.AuthService.CurrentUser?.Id ?? 5, (status, pct) =>
                 {
                     Console.WriteLine($"Pull: {pct}% - {status}");
                 }).GetAwaiter().GetResult();
@@ -84,7 +86,7 @@ static class Program
             Console.WriteLine("\nTesting PushToCloudAsync...");
             try
             {
-                var (pushOk, pushMsg) = Services.OnlineDatabaseService.PushToCloudAsync(connStr, 1, (status, pct) =>
+                var (pushOk, pushMsg) = Services.OnlineDatabaseService.PushToCloudAsync(connStr, Services.AuthService.CurrentUser?.Id ?? 5, (status, pct) =>
                 {
                     Console.WriteLine($"Push: {pct}% - {status}");
                 }).GetAwaiter().GetResult();

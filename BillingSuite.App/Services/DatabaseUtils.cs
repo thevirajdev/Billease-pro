@@ -154,7 +154,7 @@ namespace BillingSuite.App.Services
                         if (!hasCol) continue;
 
                         using var cmd = conn.CreateCommand();
-                        cmd.CommandText = $"UPDATE \"{tbl}\" SET OwnerUserId = @uid WHERE OwnerUserId IS NULL;";
+                        cmd.CommandText = $"UPDATE \"{tbl}\" SET OwnerUserId = @uid WHERE OwnerUserId IS NULL OR OwnerUserId != @uid;";
                         var p = cmd.CreateParameter();
                         p.ParameterName = "@uid";
                         p.Value = ownerUserId;

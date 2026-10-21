@@ -121,8 +121,8 @@ namespace BillingSuite.App.Services
                 var normalized = NormalizeConnectionString(connectionString);
                 var csb = new NpgsqlConnectionStringBuilder(normalized)
                 {
-                    Timeout = 12,
-                    CommandTimeout = 12
+                    Timeout = 30,
+                    CommandTimeout = 30
                 };
 
                 await using var conn = new NpgsqlConnection(csb.ConnectionString);
@@ -324,6 +324,7 @@ namespace BillingSuite.App.Services
                 );
                 CREATE INDEX IF NOT EXISTS idx_purchases_owner ON purchases(owner_user_id);
 
+                ALTER TABLE purchases ADD COLUMN IF NOT EXISTS status VARCHAR(50) DEFAULT 'Saved';
                 ALTER TABLE purchases ADD COLUMN IF NOT EXISTS extra_cost_name VARCHAR(100);
                 ALTER TABLE purchases ADD COLUMN IF NOT EXISTS extra_cost_amount NUMERIC(18,2) DEFAULT 0;
                 ALTER TABLE purchases ADD COLUMN IF NOT EXISTS extra_cost_is_percent INT DEFAULT 0;
@@ -558,7 +559,7 @@ namespace BillingSuite.App.Services
             }
         }
 
-        private static async Task<int> ExecuteBatchChunkAsync(NpgsqlConnection conn, List<NpgsqlBatchCommand> batchCommands, int chunkSize = 50)
+        private static async Task<int> ExecuteBatchChunkAsync(NpgsqlConnection conn, List<NpgsqlBatchCommand> batchCommands, int chunkSize = 250)
         {
             if (batchCommands.Count == 0) return 0;
             int count = 0;
@@ -695,15 +696,46 @@ namespace BillingSuite.App.Services
                             TotalPaid = COALESCE((SELECT SUM(Amount) FROM Payments WHERE InvoiceId = Invoices.Id), TotalPaid)
                         WHERE Id >= 4345;
                         UPDATE RecycleBin SET EntityType = 'Purchase' WHERE LOWER(EntityType) = 'purchase';
-                        DELETE FROM Purchases WHERE Id IN (SELECT EntityId FROM RecycleBin WHERE LOWER(EntityType) = 'purchase');
-                        DELETE FROM PurchaseItems WHERE PurchaseId NOT IN (SELECT Id FROM Purchases);
-                        DELETE FROM PurchasePayments WHERE PurchaseId NOT IN (SELECT Id FROM Purchases);
+
+
+
                     ");
                 }
                 catch { }
 
-                var pushDeletedPurIds = await db.RecycleBin.IgnoreQueryFilters()
-                    .Where(r => r.EntityType != null && r.EntityType.ToLower() == "purchase")
+                if (effectiveUserId.HasValue)
+                {
+                    try
+                    {
+                        int uid = effectiveUserId.Value;
+                        db.Database.ExecuteSqlRaw(@"
+                            UPDATE Purchases SET OwnerUserId = {0} WHERE OwnerUserId IS NULL OR (OwnerUserId = 1 AND {0} != 1);
+                            UPDATE PurchaseItems SET OwnerUserId = {0} WHERE OwnerUserId IS NULL OR (OwnerUserId = 1 AND {0} != 1);
+                            UPDATE PurchasePayments SET OwnerUserId = {0} WHERE OwnerUserId IS NULL OR (OwnerUserId = 1 AND {0} != 1);
+                            UPDATE Suppliers SET OwnerUserId = {0} WHERE OwnerUserId IS NULL OR (OwnerUserId = 1 AND {0} != 1);
+                        ", uid);
+                    }
+                    catch { }
+                }
+
+                if (effectiveUserId.HasValue && effectiveUserId.Value != 1)
+                {
+                    try
+                    {
+                        await using var pgFixCmd = new NpgsqlCommand($@"
+                            UPDATE purchases SET owner_user_id = {effectiveUserId.Value} WHERE owner_user_id = 1;
+                            UPDATE purchase_items SET owner_user_id = {effectiveUserId.Value} WHERE owner_user_id = 1;
+                            UPDATE purchase_payments SET owner_user_id = {effectiveUserId.Value} WHERE owner_user_id = 1;
+                            UPDATE suppliers SET owner_user_id = {effectiveUserId.Value} WHERE owner_user_id = 1;
+                        ", conn);
+                        await pgFixCmd.ExecuteNonQueryAsync();
+                    }
+                    catch { }
+                }
+
+                var purRecQuery = db.RecycleBin.IgnoreQueryFilters();
+                var pushDeletedPurIds = await purRecQuery
+                    .Where(r => r.EntityType != null && r.EntityType.ToLower() == "purchase" && (!effectiveUserId.HasValue || r.OwnerUserId == effectiveUserId.Value || r.OwnerUserId == null))
                     .Select(r => r.EntityId)
                     .ToListAsync();
                 var pushDeletedPurSet = new HashSet<int>(pushDeletedPurIds);
@@ -973,18 +1005,18 @@ namespace BillingSuite.App.Services
                     {
                         var sql = @"
                             INSERT INTO purchases (
-                                id, supplier_id, purchase_date, invoice_number, subtotal, discount, discount_is_percent, tax, shipping, total, paid, due, notes,
+                                id, supplier_id, purchase_date, invoice_number, subtotal, discount, discount_is_percent, tax, shipping, total, paid, due, notes, status,
                                 extra_cost_name, extra_cost_amount, extra_cost_is_percent, total_discount, total_cgst, total_sgst, total_igst, owner_user_id, created_at, updated_at
                             )
                             VALUES (
-                                @id, @supplier_id, @purchase_date, @invoice_number, @subtotal, @discount, @discount_is_percent, @tax, @shipping, @total, @paid, @due, @notes,
+                                @id, @supplier_id, @purchase_date, @invoice_number, @subtotal, @discount, @discount_is_percent, @tax, @shipping, @total, @paid, @due, @notes, @status,
                                 @extra_cost_name, @extra_cost_amount, @extra_cost_is_percent, @total_discount, @total_cgst, @total_sgst, @total_igst, @owner_user_id, @created_at, @updated_at
                             )
                             ON CONFLICT (id) DO UPDATE SET
                                 supplier_id = EXCLUDED.supplier_id, purchase_date = EXCLUDED.purchase_date,
                                 invoice_number = EXCLUDED.invoice_number, subtotal = EXCLUDED.subtotal, discount = EXCLUDED.discount,
                                 discount_is_percent = EXCLUDED.discount_is_percent, tax = EXCLUDED.tax, shipping = EXCLUDED.shipping,
-                                total = EXCLUDED.total, paid = EXCLUDED.paid, due = EXCLUDED.due, notes = EXCLUDED.notes,
+                                total = EXCLUDED.total, paid = EXCLUDED.paid, due = EXCLUDED.due, notes = EXCLUDED.notes, status = EXCLUDED.status,
                                 extra_cost_name = EXCLUDED.extra_cost_name, extra_cost_amount = EXCLUDED.extra_cost_amount,
                                 extra_cost_is_percent = EXCLUDED.extra_cost_is_percent, total_discount = EXCLUDED.total_discount,
                                 total_cgst = EXCLUDED.total_cgst, total_sgst = EXCLUDED.total_sgst, total_igst = EXCLUDED.total_igst,
@@ -1003,6 +1035,7 @@ namespace BillingSuite.App.Services
                         cmd.Parameters.AddWithValue("paid", (object?)pur.Paid ?? 0m);
                         cmd.Parameters.AddWithValue("due", (object?)pur.Due ?? 0m);
                         cmd.Parameters.AddWithValue("notes", (object?)pur.Notes ?? DBNull.Value);
+                        cmd.Parameters.AddWithValue("status", (object?)pur.Status ?? "Saved");
                         cmd.Parameters.AddWithValue("extra_cost_name", (object?)pur.ExtraCostName ?? DBNull.Value);
                         cmd.Parameters.AddWithValue("extra_cost_amount", (object?)pur.ExtraCostAmount ?? 0m);
                         cmd.Parameters.AddWithValue("extra_cost_is_percent", pur.ExtraCostIsPercent.HasValue ? (pur.ExtraCostIsPercent.Value ? 1 : 0) : 0);
@@ -1010,7 +1043,7 @@ namespace BillingSuite.App.Services
                         cmd.Parameters.AddWithValue("total_cgst", (object?)pur.TotalCgst ?? 0m);
                         cmd.Parameters.AddWithValue("total_sgst", (object?)pur.TotalSgst ?? 0m);
                         cmd.Parameters.AddWithValue("total_igst", (object?)pur.TotalIgst ?? 0m);
-                        cmd.Parameters.AddWithValue("owner_user_id", (object?)pur.OwnerUserId ?? DBNull.Value);
+                        cmd.Parameters.AddWithValue("owner_user_id", (object?)(pur.OwnerUserId ?? effectiveUserId) ?? DBNull.Value);
                         cmd.Parameters.AddWithValue("created_at", pur.CreatedAt);
                         cmd.Parameters.AddWithValue("updated_at", (object?)pur.UpdatedAt ?? DateTime.UtcNow);
                         purchaseCmds.Add(cmd);
@@ -1096,7 +1129,7 @@ namespace BillingSuite.App.Services
                         cmd.Parameters.AddWithValue("sgst_percent", (object?)pi.SgstPercent ?? 0m);
                         cmd.Parameters.AddWithValue("igst_percent", (object?)pi.IgstPercent ?? 0m);
                         cmd.Parameters.AddWithValue("line_total", (object?)pi.LineTotal ?? 0m);
-                        cmd.Parameters.AddWithValue("owner_user_id", (object?)pi.OwnerUserId ?? DBNull.Value);
+                        cmd.Parameters.AddWithValue("owner_user_id", (object?)(pi.OwnerUserId ?? effectiveUserId) ?? DBNull.Value);
                         purchaseItemCmds.Add(cmd);
                     }
                     totalSynced += await ExecuteBatchChunkAsync(conn, purchaseItemCmds);
@@ -1131,7 +1164,7 @@ namespace BillingSuite.App.Services
                         cmd.Parameters.AddWithValue("gst_number", (object?)sup.GstNumber ?? DBNull.Value);
                         cmd.Parameters.AddWithValue("back_dues", (object?)sup.BackDues ?? 0m);
                         cmd.Parameters.AddWithValue("last_purchase_at", (object?)sup.LastPurchaseAt ?? DBNull.Value);
-                        cmd.Parameters.AddWithValue("owner_user_id", (object?)sup.OwnerUserId ?? DBNull.Value);
+                        cmd.Parameters.AddWithValue("owner_user_id", (object?)(sup.OwnerUserId ?? effectiveUserId) ?? DBNull.Value);
                         cmd.Parameters.AddWithValue("created_at", sup.CreatedAt);
                         cmd.Parameters.AddWithValue("updated_at", (object?)sup.UpdatedAt ?? DateTime.UtcNow);
                         supplierCmds.Add(cmd);
@@ -1228,7 +1261,7 @@ namespace BillingSuite.App.Services
                         cmd.Parameters.AddWithValue("method", (object?)pp.Method ?? DBNull.Value);
                         cmd.Parameters.AddWithValue("amount", pp.Amount);
                         cmd.Parameters.AddWithValue("notes", (object?)pp.Notes ?? DBNull.Value);
-                        cmd.Parameters.AddWithValue("owner_user_id", (object?)pp.OwnerUserId ?? DBNull.Value);
+                        cmd.Parameters.AddWithValue("owner_user_id", (object?)(pp.OwnerUserId ?? effectiveUserId) ?? DBNull.Value);
                         purchasePaymentCmds.Add(cmd);
                     }
                     totalSynced += await ExecuteBatchChunkAsync(conn, purchasePaymentCmds);
@@ -1525,15 +1558,45 @@ namespace BillingSuite.App.Services
                         UPDATE RecycleBin SET DeletedAt = datetime('now') WHERE DeletedAt = '' OR DeletedAt IS NULL;
                         UPDATE AiChatMessages SET Timestamp = datetime('now') WHERE Timestamp = '' OR Timestamp IS NULL;
                         UPDATE RecycleBin SET EntityType = 'Purchase' WHERE LOWER(EntityType) = 'purchase';
-                        DELETE FROM Purchases WHERE Id IN (SELECT EntityId FROM RecycleBin WHERE LOWER(EntityType) = 'purchase');
-                        DELETE FROM PurchaseItems WHERE PurchaseId NOT IN (SELECT Id FROM Purchases);
-                        DELETE FROM PurchasePayments WHERE PurchaseId NOT IN (SELECT Id FROM Purchases);
+
+
+
                     ");
                 }
                 catch { }
 
+                if (effectiveUserId.HasValue)
+                {
+                    try
+                    {
+                        int uid = effectiveUserId.Value;
+                        db.Database.ExecuteSqlRaw(@"
+                            UPDATE Purchases SET OwnerUserId = {0} WHERE OwnerUserId IS NULL OR (OwnerUserId = 1 AND {0} != 1);
+                            UPDATE PurchaseItems SET OwnerUserId = {0} WHERE OwnerUserId IS NULL OR (OwnerUserId = 1 AND {0} != 1);
+                            UPDATE PurchasePayments SET OwnerUserId = {0} WHERE OwnerUserId IS NULL OR (OwnerUserId = 1 AND {0} != 1);
+                            UPDATE Suppliers SET OwnerUserId = {0} WHERE OwnerUserId IS NULL OR (OwnerUserId = 1 AND {0} != 1);
+                        ", uid);
+                    }
+                    catch { }
+                }
+
+                if (effectiveUserId.HasValue && effectiveUserId.Value != 1)
+                {
+                    try
+                    {
+                        await using var pgFixCmd = new NpgsqlCommand($@"
+                            UPDATE purchases SET owner_user_id = {effectiveUserId.Value} WHERE owner_user_id = 1;
+                            UPDATE purchase_items SET owner_user_id = {effectiveUserId.Value} WHERE owner_user_id = 1;
+                            UPDATE purchase_payments SET owner_user_id = {effectiveUserId.Value} WHERE owner_user_id = 1;
+                            UPDATE suppliers SET owner_user_id = {effectiveUserId.Value} WHERE owner_user_id = 1;
+                        ", conn);
+                        await pgFixCmd.ExecuteNonQueryAsync();
+                    }
+                    catch { }
+                }
+
                 var localDeletedPurchases = await db.RecycleBin.IgnoreQueryFilters()
-                    .Where(r => r.EntityType != null && r.EntityType.ToLower() == "purchase")
+                    .Where(r => r.EntityType != null && r.EntityType.ToLower() == "purchase" && (!effectiveUserId.HasValue || r.OwnerUserId == effectiveUserId.Value || r.OwnerUserId == null))
                     .Select(r => r.EntityId)
                     .ToListAsync();
                 var allDeletedPurSet = new HashSet<int>(localDeletedPurchases);
@@ -1645,7 +1708,16 @@ namespace BillingSuite.App.Services
                         restoredCount++;
                     }
                 }
-                try { await db.SaveChangesAsync(); } catch (Exception ex) { Console.WriteLine("[Pull] Save error: " + (ex.InnerException?.Message ?? ex.Message)); }
+                try { await db.SaveChangesAsync(); }
+                catch (Exception ex)
+                {
+                    Console.WriteLine("[Pull] Save error: " + (ex.InnerException?.Message ?? ex.Message));
+                    foreach (var entry in db.ChangeTracker.Entries().ToList())
+                    {
+                        try { await db.SaveChangesAsync(); }
+                        catch { entry.State = EntityState.Detached; }
+                    }
+                }
                 db.ChangeTracker.Clear();
 
                 // 3. Pull Batches
@@ -1687,7 +1759,16 @@ namespace BillingSuite.App.Services
                         restoredCount++;
                     }
                 }
-                try { await db.SaveChangesAsync(); } catch (Exception ex) { Console.WriteLine("[Pull] Save error: " + (ex.InnerException?.Message ?? ex.Message)); }
+                try { await db.SaveChangesAsync(); }
+                catch (Exception ex)
+                {
+                    Console.WriteLine("[Pull] Save error: " + (ex.InnerException?.Message ?? ex.Message));
+                    foreach (var entry in db.ChangeTracker.Entries().ToList())
+                    {
+                        try { await db.SaveChangesAsync(); }
+                        catch { entry.State = EntityState.Detached; }
+                    }
+                }
                 db.ChangeTracker.Clear();
 
                 // 4. Pull Invoices
@@ -1728,7 +1809,16 @@ namespace BillingSuite.App.Services
                         restoredCount++;
                     }
                 }
-                try { await db.SaveChangesAsync(); } catch (Exception ex) { Console.WriteLine("[Pull] Save error: " + (ex.InnerException?.Message ?? ex.Message)); }
+                try { await db.SaveChangesAsync(); }
+                catch (Exception ex)
+                {
+                    Console.WriteLine("[Pull] Save error: " + (ex.InnerException?.Message ?? ex.Message));
+                    foreach (var entry in db.ChangeTracker.Entries().ToList())
+                    {
+                        try { await db.SaveChangesAsync(); }
+                        catch { entry.State = EntityState.Detached; }
+                    }
+                }
                 db.ChangeTracker.Clear();
 
                 // 5. Pull Invoice Items
@@ -1764,12 +1854,30 @@ namespace BillingSuite.App.Services
                         restoredCount++;
                     }
                 }
-                try { await db.SaveChangesAsync(); } catch (Exception ex) { Console.WriteLine("[Pull] Save error: " + (ex.InnerException?.Message ?? ex.Message)); }
+                try { await db.SaveChangesAsync(); }
+                catch (Exception ex)
+                {
+                    Console.WriteLine("[Pull] Save error: " + (ex.InnerException?.Message ?? ex.Message));
+                    foreach (var entry in db.ChangeTracker.Entries().ToList())
+                    {
+                        try { await db.SaveChangesAsync(); }
+                        catch { entry.State = EntityState.Detached; }
+                    }
+                }
                 db.ChangeTracker.Clear();
 
                 // 6. Pull Purchases
                 progressCallback?.Invoke("Downloading Purchases (6/14 tables)...", 60);
-                var purSql = $"SELECT id, supplier_id, purchase_date, invoice_number, subtotal, discount, discount_is_percent, tax, shipping, total, paid, due, notes, extra_cost_name, extra_cost_amount, extra_cost_is_percent, total_discount, total_cgst, total_sgst, total_igst, owner_user_id, created_at, updated_at FROM purchases{BuildFilter("updated_at >= @since OR created_at >= @since")};";
+                var localPurIds = await db.Purchases.IgnoreQueryFilters().Select(p => p.Id).ToListAsync();
+                var missingPurFilter = (localPurIds.Count > 0 && localPurIds.Count < 2000) 
+                    ? $" OR id NOT IN ({string.Join(",", localPurIds)})" 
+                    : "";
+
+                var purDateCond = deltaThreshold.HasValue 
+                    ? $"updated_at >= @since OR created_at >= @since{missingPurFilter}" 
+                    : null;
+
+                var purSql = $"SELECT id, supplier_id, purchase_date, invoice_number, subtotal, discount, discount_is_percent, tax, shipping, total, paid, due, notes, extra_cost_name, extra_cost_amount, extra_cost_is_percent, total_discount, total_cgst, total_sgst, total_igst, owner_user_id, created_at, updated_at, status FROM purchases{BuildFilter(purDateCond)};";
                 await using (var cmd = new NpgsqlCommand(purSql, conn))
                 {
                     AddSinceParam(cmd);
@@ -1808,21 +1916,47 @@ namespace BillingSuite.App.Services
                         existing.TotalCgst = reader.IsDBNull(17) ? null : reader.GetDecimal(17);
                         existing.TotalSgst = reader.IsDBNull(18) ? null : reader.GetDecimal(18);
                         existing.TotalIgst = reader.IsDBNull(19) ? null : reader.GetDecimal(19);
-                        existing.OwnerUserId = reader.IsDBNull(20) ? null : reader.GetInt32(20);
+                        existing.OwnerUserId = reader.IsDBNull(20) ? effectiveUserId : reader.GetInt32(20);
+                        existing.Status = reader.IsDBNull(23) ? "Saved" : reader.GetString(23);
                         existing.CreatedAt = reader.IsDBNull(21) ? DateTime.UtcNow : reader.GetDateTime(21);
                         existing.UpdatedAt = reader.IsDBNull(22) ? null : reader.GetDateTime(22);
                         restoredCount++;
                     }
                 }
-                try { await db.SaveChangesAsync(); } catch (Exception ex) { Console.WriteLine("[Pull] Save error: " + (ex.InnerException?.Message ?? ex.Message)); }
+                try { await db.SaveChangesAsync(); }
+                catch (Exception ex)
+                {
+                    Console.WriteLine("[Pull] Save error: " + (ex.InnerException?.Message ?? ex.Message));
+                    foreach (var entry in db.ChangeTracker.Entries().ToList())
+                    {
+                        try { await db.SaveChangesAsync(); }
+                        catch { entry.State = EntityState.Detached; }
+                    }
+                }
                 db.ChangeTracker.Clear();
 
                 // 7. Pull Purchase Items
-                progressCallback?.Invoke("Downloading Purchase Items (7/14 tables)...", 68);
+                progressCallback?.Invoke("Downloading Purchase Items (7/14 tables)...", 68); 
+                var localPurItemIds = await db.PurchaseItems.IgnoreQueryFilters().Select(pi => pi.Id).ToListAsync();
+                var missingPurItemFilter = (localPurItemIds.Count > 0 && localPurItemIds.Count < 10000) 
+                    ? $" OR id NOT IN ({string.Join(",", localPurItemIds)})" 
+                    : "";
+
+
                 string? purItemDateFilter = deltaThreshold.HasValue
-                    ? $"purchase_id IN (SELECT id FROM purchases WHERE (updated_at >= @since OR created_at >= @since){(effectiveUserId.HasValue ? $" AND owner_user_id = {effectiveUserId.Value}" : "")})"
+                    ? $"purchase_id IN (SELECT id FROM purchases WHERE (updated_at >= @since OR created_at >= @since){(effectiveUserId.HasValue ? $" AND owner_user_id = {effectiveUserId.Value}" : "")}){missingPurItemFilter}"
                     : null;
-                var purItemSql = $"SELECT id, purchase_id, product_id, product_name, batch_number, expiry, mrp, cost_price, selling_price, quantity, pack, bonus, marketed_by, rate, discount_percent, cgst_percent, sgst_percent, igst_percent, line_total, owner_user_id FROM purchase_items{BuildFilter(purItemDateFilter)};";
+
+                var purItemOwnerCond = effectiveUserId.HasValue 
+                    ? $"(owner_user_id = {effectiveUserId.Value} OR purchase_id IN (SELECT id FROM purchases WHERE owner_user_id = {effectiveUserId.Value}))" 
+                    : "";
+
+                var purItemSql = $"SELECT id, purchase_id, product_id, product_name, batch_number, expiry, mrp, cost_price, selling_price, quantity, pack, bonus, marketed_by, rate, discount_percent, cgst_percent, sgst_percent, igst_percent, line_total, owner_user_id FROM purchase_items";
+                var purItemClauses = new List<string>();
+                if (!string.IsNullOrEmpty(purItemOwnerCond)) purItemClauses.Add(purItemOwnerCond);
+                if (!string.IsNullOrEmpty(purItemDateFilter)) purItemClauses.Add($"({purItemDateFilter})");
+                if (purItemClauses.Count > 0) purItemSql += " WHERE " + string.Join(" AND ", purItemClauses);
+                purItemSql += ";";
                 await using (var cmd = new NpgsqlCommand(purItemSql, conn))
                 {
                     AddSinceParam(cmd);
@@ -1861,16 +1995,28 @@ namespace BillingSuite.App.Services
                         existing.SgstPercent = reader.IsDBNull(16) ? null : reader.GetDecimal(16);
                         existing.IgstPercent = reader.IsDBNull(17) ? null : reader.GetDecimal(17);
                         existing.LineTotal = reader.IsDBNull(18) ? null : reader.GetDecimal(18);
-                        existing.OwnerUserId = reader.IsDBNull(19) ? null : reader.GetInt32(19);
+                        existing.OwnerUserId = reader.IsDBNull(19) ? effectiveUserId : reader.GetInt32(19);
                         restoredCount++;
                     }
                 }
-                try { await db.SaveChangesAsync(); } catch (Exception ex) { Console.WriteLine("[Pull] Save error: " + (ex.InnerException?.Message ?? ex.Message)); }
+                try { await db.SaveChangesAsync(); }
+                catch (Exception ex)
+                {
+                    Console.WriteLine("[Pull] Save error: " + (ex.InnerException?.Message ?? ex.Message));
+                    foreach (var entry in db.ChangeTracker.Entries().ToList())
+                    {
+                        try { await db.SaveChangesAsync(); }
+                        catch { entry.State = EntityState.Detached; }
+                    }
+                }
                 db.ChangeTracker.Clear();
 
                 // 8. Pull Suppliers
                 progressCallback?.Invoke("Downloading Suppliers (8/14 tables)...", 75);
-                var supSql = $"SELECT id, name, email, phone, city, state, gst_number, back_dues, last_purchase_at, owner_user_id, created_at, updated_at FROM suppliers{BuildFilter("updated_at >= @since OR created_at >= @since")};";
+                var localSupIds = await db.Suppliers.IgnoreQueryFilters().Select(s => s.Id).ToListAsync();
+                var missingSupFilter = (localSupIds.Count > 0 && localSupIds.Count < 2000) ? $" OR id NOT IN ({string.Join(",", localSupIds)})" : "";
+                var supDateCond = deltaThreshold.HasValue ? $"updated_at >= @since OR created_at >= @since{missingSupFilter}" : null;
+                var supSql = $"SELECT id, name, email, phone, city, state, gst_number, back_dues, last_purchase_at, owner_user_id, created_at, updated_at FROM suppliers{BuildFilter(supDateCond)};";
                 await using (var cmd = new NpgsqlCommand(supSql, conn))
                 {
                     AddSinceParam(cmd);
@@ -1892,13 +2038,22 @@ namespace BillingSuite.App.Services
                         existing.GstNumber = reader.IsDBNull(6) ? null : reader.GetString(6);
                         existing.BackDues = reader.IsDBNull(7) ? null : reader.GetDecimal(7);
                         existing.LastPurchaseAt = reader.IsDBNull(8) ? null : reader.GetDateTime(8);
-                        existing.OwnerUserId = reader.IsDBNull(9) ? null : reader.GetInt32(9);
+                        existing.OwnerUserId = reader.IsDBNull(9) ? effectiveUserId : reader.GetInt32(9);
                         existing.CreatedAt = reader.IsDBNull(10) ? DateTime.UtcNow : reader.GetDateTime(10);
                         existing.UpdatedAt = reader.IsDBNull(11) ? null : reader.GetDateTime(11);
                         restoredCount++;
                     }
                 }
-                try { await db.SaveChangesAsync(); } catch (Exception ex) { Console.WriteLine("[Pull] Save error: " + (ex.InnerException?.Message ?? ex.Message)); }
+                try { await db.SaveChangesAsync(); }
+                catch (Exception ex)
+                {
+                    Console.WriteLine("[Pull] Save error: " + (ex.InnerException?.Message ?? ex.Message));
+                    foreach (var entry in db.ChangeTracker.Entries().ToList())
+                    {
+                        try { await db.SaveChangesAsync(); }
+                        catch { entry.State = EntityState.Detached; }
+                    }
+                }
                 db.ChangeTracker.Clear();
 
                 // 9. Pull Expenses
@@ -1922,12 +2077,21 @@ namespace BillingSuite.App.Services
                         existing.Category = reader.IsDBNull(3) ? "General" : reader.GetString(3);
                         existing.Date = reader.IsDBNull(4) ? DateTime.UtcNow : reader.GetDateTime(4);
                         existing.Note = reader.IsDBNull(5) ? null : reader.GetString(5);
-                        existing.OwnerUserId = reader.IsDBNull(6) ? null : reader.GetInt32(6);
+                        existing.OwnerUserId = reader.IsDBNull(6) ? effectiveUserId : reader.GetInt32(6);
                         existing.CreatedAt = reader.IsDBNull(7) ? DateTime.UtcNow : reader.GetDateTime(7);
                         restoredCount++;
                     }
                 }
-                try { await db.SaveChangesAsync(); } catch (Exception ex) { Console.WriteLine("[Pull] Save error: " + (ex.InnerException?.Message ?? ex.Message)); }
+                try { await db.SaveChangesAsync(); }
+                catch (Exception ex)
+                {
+                    Console.WriteLine("[Pull] Save error: " + (ex.InnerException?.Message ?? ex.Message));
+                    foreach (var entry in db.ChangeTracker.Entries().ToList())
+                    {
+                        try { await db.SaveChangesAsync(); }
+                        catch { entry.State = EntityState.Detached; }
+                    }
+                }
                 db.ChangeTracker.Clear();
 
                 // 10. Pull Payments
@@ -1951,16 +2115,43 @@ namespace BillingSuite.App.Services
                         existing.Method = reader.IsDBNull(3) ? "Cash" : reader.GetString(3);
                         existing.Amount = reader.IsDBNull(4) ? 0m : reader.GetDecimal(4);
                         existing.Notes = reader.IsDBNull(5) ? null : reader.GetString(5);
-                        existing.OwnerUserId = reader.IsDBNull(6) ? null : reader.GetInt32(6);
+                        existing.OwnerUserId = reader.IsDBNull(6) ? effectiveUserId : reader.GetInt32(6);
                         restoredCount++;
                     }
                 }
-                try { await db.SaveChangesAsync(); } catch (Exception ex) { Console.WriteLine("[Pull] Save error: " + (ex.InnerException?.Message ?? ex.Message)); }
+                try { await db.SaveChangesAsync(); }
+                catch (Exception ex)
+                {
+                    Console.WriteLine("[Pull] Save error: " + (ex.InnerException?.Message ?? ex.Message));
+                    foreach (var entry in db.ChangeTracker.Entries().ToList())
+                    {
+                        try { await db.SaveChangesAsync(); }
+                        catch { entry.State = EntityState.Detached; }
+                    }
+                }
                 db.ChangeTracker.Clear();
 
                 // 11. Pull Purchase Payments
                 progressCallback?.Invoke("Downloading Purchase Payments (11/14 tables)...", 90);
-                var purPaySql = $"SELECT id, purchase_id, date, method, amount, notes, owner_user_id FROM purchase_payments{BuildFilter("created_at >= @since OR date >= @since")};";
+                var localPurPayIds = await db.PurchasePayments.IgnoreQueryFilters().Select(pp => pp.Id).ToListAsync();
+                var missingPurPayFilter = (localPurPayIds.Count > 0 && localPurPayIds.Count < 5000) 
+                    ? $" OR id NOT IN ({string.Join(",", localPurPayIds)})" 
+                    : "";
+
+                string? purPayDateFilter = deltaThreshold.HasValue
+                    ? $"created_at >= @since OR date >= @since{missingPurPayFilter}"
+                    : null;
+
+                var purPayOwnerCond = effectiveUserId.HasValue 
+                    ? $"(owner_user_id = {effectiveUserId.Value} OR purchase_id IN (SELECT id FROM purchases WHERE owner_user_id = {effectiveUserId.Value}))" 
+                    : "";
+
+                var purPaySql = $"SELECT id, purchase_id, date, method, amount, notes, owner_user_id FROM purchase_payments";
+                var purPayClauses = new List<string>();
+                if (!string.IsNullOrEmpty(purPayOwnerCond)) purPayClauses.Add(purPayOwnerCond);
+                if (!string.IsNullOrEmpty(purPayDateFilter)) purPayClauses.Add($"({purPayDateFilter})");
+                if (purPayClauses.Count > 0) purPaySql += " WHERE " + string.Join(" AND ", purPayClauses);
+                purPaySql += ";";
                 await using (var cmd = new NpgsqlCommand(purPaySql, conn))
                 {
                     AddSinceParam(cmd);
@@ -1986,11 +2177,20 @@ namespace BillingSuite.App.Services
                         existing.Method = reader.IsDBNull(3) ? null : reader.GetString(3);
                         existing.Amount = reader.IsDBNull(4) ? 0m : reader.GetDecimal(4);
                         existing.Notes = reader.IsDBNull(5) ? null : reader.GetString(5);
-                        existing.OwnerUserId = reader.IsDBNull(6) ? null : reader.GetInt32(6);
+                        existing.OwnerUserId = reader.IsDBNull(6) ? effectiveUserId : reader.GetInt32(6);
                         restoredCount++;
                     }
                 }
-                try { await db.SaveChangesAsync(); } catch (Exception ex) { Console.WriteLine("[Pull] Save error: " + (ex.InnerException?.Message ?? ex.Message)); }
+                try { await db.SaveChangesAsync(); }
+                catch (Exception ex)
+                {
+                    Console.WriteLine("[Pull] Save error: " + (ex.InnerException?.Message ?? ex.Message));
+                    foreach (var entry in db.ChangeTracker.Entries().ToList())
+                    {
+                        try { await db.SaveChangesAsync(); }
+                        catch { entry.State = EntityState.Detached; }
+                    }
+                }
                 db.ChangeTracker.Clear();
 
                 // 12. Pull Damaged Items
@@ -2020,7 +2220,16 @@ namespace BillingSuite.App.Services
                         restoredCount++;
                     }
                 }
-                try { await db.SaveChangesAsync(); } catch (Exception ex) { Console.WriteLine("[Pull] Save error: " + (ex.InnerException?.Message ?? ex.Message)); }
+                try { await db.SaveChangesAsync(); }
+                catch (Exception ex)
+                {
+                    Console.WriteLine("[Pull] Save error: " + (ex.InnerException?.Message ?? ex.Message));
+                    foreach (var entry in db.ChangeTracker.Entries().ToList())
+                    {
+                        try { await db.SaveChangesAsync(); }
+                        catch { entry.State = EntityState.Detached; }
+                    }
+                }
                 db.ChangeTracker.Clear();
 
                 // 13. Pull Recycle Bin
@@ -2101,7 +2310,16 @@ namespace BillingSuite.App.Services
                         }
                     }
                 }
-                try { await db.SaveChangesAsync(); } catch (Exception ex) { Console.WriteLine("[Pull] Save error: " + (ex.InnerException?.Message ?? ex.Message)); }
+                try { await db.SaveChangesAsync(); }
+                catch (Exception ex)
+                {
+                    Console.WriteLine("[Pull] Save error: " + (ex.InnerException?.Message ?? ex.Message));
+                    foreach (var entry in db.ChangeTracker.Entries().ToList())
+                    {
+                        try { await db.SaveChangesAsync(); }
+                        catch { entry.State = EntityState.Detached; }
+                    }
+                }
                 db.ChangeTracker.Clear();
 
                 // 14. Pull AI Chat Messages
@@ -2127,7 +2345,16 @@ namespace BillingSuite.App.Services
                         restoredCount++;
                     }
                 }
-                try { await db.SaveChangesAsync(); } catch (Exception ex) { Console.WriteLine("[Pull] Save error: " + (ex.InnerException?.Message ?? ex.Message)); }
+                try { await db.SaveChangesAsync(); }
+                catch (Exception ex)
+                {
+                    Console.WriteLine("[Pull] Save error: " + (ex.InnerException?.Message ?? ex.Message));
+                    foreach (var entry in db.ChangeTracker.Entries().ToList())
+                    {
+                        try { await db.SaveChangesAsync(); }
+                        catch { entry.State = EntityState.Detached; }
+                    }
+                }
                 db.ChangeTracker.Clear();
 
                 // 15. Pull App Settings
@@ -2182,7 +2409,16 @@ namespace BillingSuite.App.Services
                         restoredCount++;
                     }
                 }
-                try { await db.SaveChangesAsync(); } catch (Exception ex) { Console.WriteLine("[Pull] Save error: " + (ex.InnerException?.Message ?? ex.Message)); }
+                try { await db.SaveChangesAsync(); }
+                catch (Exception ex)
+                {
+                    Console.WriteLine("[Pull] Save error: " + (ex.InnerException?.Message ?? ex.Message));
+                    foreach (var entry in db.ChangeTracker.Entries().ToList())
+                    {
+                        try { await db.SaveChangesAsync(); }
+                        catch { entry.State = EntityState.Detached; }
+                    }
+                }
                 db.ChangeTracker.Clear();
 
                 // Re-sync current logged-in user's profile so foreign company settings never overwrite user profile
@@ -2254,9 +2490,9 @@ namespace BillingSuite.App.Services
                                 Paid = COALESCE((SELECT SUM(Amount) FROM PurchasePayments WHERE PurchaseId = Purchases.Id), Paid),
                                 Due = (COALESCE((SELECT SUM(LineTotal) FROM PurchaseItems WHERE PurchaseId = Purchases.Id), Subtotal) + COALESCE(Tax, 0) - COALESCE(Discount, 0) + COALESCE(ExtraCostAmount, 0)) - COALESCE((SELECT SUM(Amount) FROM PurchasePayments WHERE PurchaseId = Purchases.Id), Paid);
                             UPDATE RecycleBin SET EntityType = 'Purchase' WHERE LOWER(EntityType) = 'purchase';
-                            DELETE FROM Purchases WHERE Id IN (SELECT EntityId FROM RecycleBin WHERE LOWER(EntityType) = 'purchase');
-                            DELETE FROM PurchaseItems WHERE PurchaseId NOT IN (SELECT Id FROM Purchases);
-                            DELETE FROM PurchasePayments WHERE PurchaseId NOT IN (SELECT Id FROM Purchases);
+    
+    
+    
                         ");
                     }
                     catch { }
